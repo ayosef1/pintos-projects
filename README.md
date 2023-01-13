@@ -1,3 +1,3 @@
 # cs212pintos
 
-Anthony, Abraham, and Gordon CS 212/112 pintos project github repository
+Anthony Mensah, Abraham Yosef, and Gordon Duncan Martinez-Piedra CS 212/112 pintos project github repository.
