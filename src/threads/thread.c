@@ -28,6 +28,9 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+/* List of sleeping threads */
+static struct list sleeping_threads_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -92,12 +95,15 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&sleeping_threads_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  initial_thread->wake_time = 0;
+  initial_thread->wake_sema = NULL;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -582,3 +588,37 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+bool cmp_sleeping_thread (const struct list_elem *a,
+                     const struct list_elem *b,
+                     void *aux UNUSED)
+{
+  struct thread *t1 = list_entry (a, struct thread, sleep_elem);
+  struct thread *t2 = list_entry (b, struct thread, sleep_elem);
+
+  return t1->wake_time < t2->wake_time;
+}
+void 
+add_to_sleeping_list(struct thread *t)
+{
+  list_insert_ordered (&sleeping_threads_list, &(t->sleep_elem),
+                       cmp_sleeping_thread, NULL);
+  sema_down (t->wake_sema);
+}
+
+void 
+wake_sleeping_threads(int64_t time)
+{
+  struct list_elem *cur;
+  while (!list_empty (&sleeping_threads_list))
+     {
+       cur = list_front (&sleeping_threads_list);
+       struct thread *t = list_entry (cur, struct thread, sleep_elem);
+       if (time < t->wake_time)
+       {
+        break;
+       }
+       list_remove (cur);
+       sema_up (t->wake_sema);
+     }
+}

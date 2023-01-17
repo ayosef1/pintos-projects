@@ -89,6 +89,12 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
+    int64_t wake_time;                  /* Time at which thread should wake
+                                           after put to sleep */
+    struct semaphore *wake_sema;        /* Used to indicate sleeping thread 
+                                           should wake up */
+    struct list_elem sleep_elem;        /* List element for sleeping threads
+                                           list */ 
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -137,5 +143,12 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+void add_to_sleeping_list(struct thread *t);
+void wake_sleeping_threads(int64_t time);
+bool cmp_sleeping_thread (const struct list_elem *a,
+                          const struct list_elem *b,
+                          void *aux UNUSED);
+
 
 #endif /* threads/thread.h */
