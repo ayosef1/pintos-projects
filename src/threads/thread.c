@@ -601,18 +601,15 @@ bool cmp_sleeping_thread (const struct list_elem *a,
 void 
 add_to_sleeping_list(struct thread *t)
 {
-  // enum intr_level old_level = intr_disable ();
   list_insert_ordered (&sleeping_threads_list, &(t->sleep_elem),
                        cmp_sleeping_thread, NULL);
-  // intr_set_level (old_level);
   sema_down (t->wake_sema);
 }
 
 void 
 wake_sleeping_threads(int64_t time)
 {
-  enum intr_level old_level = intr_disable ();
-  struct list_elem * cur;
+  struct list_elem *cur;
   while (!list_empty (&sleeping_threads_list))
      {
        cur = list_front (&sleeping_threads_list);
@@ -624,5 +621,4 @@ wake_sleeping_threads(int64_t time)
        list_remove (cur);
        sema_up (t->wake_sema);
      }
-  intr_set_level (old_level);
 }
