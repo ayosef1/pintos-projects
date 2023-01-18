@@ -601,9 +601,11 @@ bool cmp_sleeping_thread (const struct list_elem *a,
 void 
 add_to_sleeping_list(struct thread *t)
 {
+  enum intr_level old_level = intr_disable ();
   list_insert_ordered (&sleeping_threads_list, &(t->sleep_elem),
                        cmp_sleeping_thread, NULL);
   sema_down (t->wake_sema);
+  intr_set_level (old_level);
 }
 
 void 
