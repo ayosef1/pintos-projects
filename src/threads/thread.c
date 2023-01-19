@@ -622,8 +622,7 @@ add_to_sleeping_list(struct thread *t)
   lock_acquire (&sleeping_threads_lock);
   enum intr_level old_level = intr_disable ();
   list_insert_ordered (&sleeping_list, &(t->sleep_elem),
-                       compare_sleeping_thread, NULL);
-  sema_down (t->wake_sema);
+                       compare_sleeping_thread, NULL); 
   intr_set_level (old_level);
   lock_release (&sleeping_threads_lock);
   sema_down (t->wake_sema);
