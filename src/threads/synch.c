@@ -199,6 +199,7 @@ lock_acquire (struct lock *lock)
 
   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
+  list_push_back(&thread_current()->locks_held, &lock->locks_held_elem);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -232,7 +233,35 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  /* Update the lock's holder and remove from thread's locks held list*/
   lock->holder = NULL;
+
+  list_remove(&lock->locks_held_elem);
+
+  struct thread *cur = thread_current();
+  int new_priority = cur->original_priority;
+
+  /* Find the max priority of the threads waiting on other locks 
+  held by current thread */
+  struct list_elem *e;
+  
+  for (e = list_begin (&cur->locks_held); e != list_end (&cur->locks_held);
+        e = list_next (e))
+  {
+    struct lock *lock_owned_by_current_thread = list_entry (e, struct lock, 
+                                                            locks_held_elem);
+    if(!list_empty (&lock_owned_by_current_thread->semaphore.waiters))
+    {
+      struct thread *highest_priority_waiter = list_entry(list_front(
+                            &lock_owned_by_current_thread->semaphore.waiters), 
+                            struct thread, 
+                            elem);
+      new_priority = ((new_priority) > (highest_priority_waiter->priority) ? 
+                          (new_priority) : (highest_priority_waiter->priority));
+    }
+  }
+
+  thread_set_priority(new_priority);
   sema_up (&lock->semaphore);
 }
 

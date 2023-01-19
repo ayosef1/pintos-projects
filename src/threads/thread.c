@@ -209,6 +209,8 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  if (t->priority > thread_get_priority())
+    thread_yield ();
   return tid;
 }
 
@@ -343,7 +345,20 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+  enum intr_level old_level;
+  ASSERT (!intr_context ());
+  old_level = intr_disable ();
   thread_current ()->priority = new_priority;
+  if (!list_empty (&ready_list)) 
+  {
+    struct thread *highest_priority_ready = list_entry(list_front(
+                            &ready_list), 
+                            struct thread, 
+                            elem);
+    if (highest_priority_ready->priority > new_priority)
+      thread_yield();
+  }
+  intr_set_level (old_level);
 }
 
 /* Returns the current thread's priority. */
@@ -470,9 +485,13 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->original_priority = priority;
   t->wake_time = 0;
   t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
+
+  /* Initialize the list of locks held by current list*/
+  list_init (&t->locks_held);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
