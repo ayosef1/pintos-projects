@@ -40,6 +40,9 @@ static struct thread *initial_thread;
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
+/* Lock to ensure only one thread accesses sleeping_threads_list at a time */
+static struct lock sleeping_threads_lock;
+
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
   {
@@ -93,6 +96,7 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
+  lock_init (&sleeping_threads_lock);
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleeping_list);
@@ -611,14 +615,18 @@ bool compare_sleeping_thread (const struct list_elem *a,
   struct thread *t2 = list_entry (b, struct thread, sleep_elem);
   return t1->wake_time < t2->wake_time;
 }
+
 void 
 add_to_sleeping_list(struct thread *t)
 {
+  lock_acquire (&sleeping_threads_lock);
   enum intr_level old_level = intr_disable ();
   list_insert_ordered (&sleeping_list, &(t->sleep_elem),
                        compare_sleeping_thread, NULL);
   sema_down (t->wake_sema);
   intr_set_level (old_level);
+  lock_release (&sleeping_threads_lock);
+  sema_down (t->wake_sema);
 }
 
 void 
