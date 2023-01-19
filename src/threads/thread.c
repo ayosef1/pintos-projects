@@ -102,8 +102,6 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
-  initial_thread->wake_time = 0;
-  initial_thread->wake_sema = NULL;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -468,6 +466,8 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->wake_time = 0;
+  t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -601,9 +601,11 @@ bool cmp_sleeping_thread (const struct list_elem *a,
 void 
 add_to_sleeping_list(struct thread *t)
 {
+  enum intr_level old_level = intr_disable ();
   list_insert_ordered (&sleeping_threads_list, &(t->sleep_elem),
                        cmp_sleeping_thread, NULL);
   sema_down (t->wake_sema);
+  intr_set_level (old_level);
 }
 
 void 
