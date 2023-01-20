@@ -146,7 +146,10 @@ int thread_get_load_avg (void);
 
 void add_to_sleeping_list(struct thread *t);
 void wake_sleeping_threads(int64_t time);
-bool cmp_sleeping_thread (const struct list_elem *a,
+bool compare_thread_priority (const struct list_elem *a,
+                          const struct list_elem *b,
+                          void *aux UNUSED);
+bool compare_sleeping_thread (const struct list_elem *a,
                           const struct list_elem *b,
                           void *aux UNUSED);
 

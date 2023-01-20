@@ -29,7 +29,7 @@ static struct list ready_list;
 static struct list all_list;
 
 /* List of sleeping threads */
-static struct list sleeping_threads_list;
+static struct list sleeping_list;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -39,6 +39,9 @@ static struct thread *initial_thread;
 
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
+
+/* Lock to ensure only one thread accesses sleeping_threads_list at a time */
+static struct lock sleeping_threads_lock;
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -93,9 +96,10 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
+  lock_init (&sleeping_threads_lock);
   list_init (&ready_list);
   list_init (&all_list);
-  list_init (&sleeping_threads_list);
+  list_init (&sleeping_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -241,7 +245,7 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+  list_insert_ordered(&ready_list, &t->elem, compare_thread_priority, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -311,8 +315,8 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+  if (cur != idle_thread)
+    list_insert_ordered(&ready_list, &cur->elem, compare_thread_priority, NULL);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -589,32 +593,48 @@ allocate_tid (void)
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
 
-bool cmp_sleeping_thread (const struct list_elem *a,
+/* Compares priorities of threads a and b and returns 
+true if thread a has a higher priority*/
+bool 
+compare_thread_priority (const struct list_elem *a,
+                     const struct list_elem *b,
+                     void *aux UNUSED)
+{
+  struct thread *t1 = list_entry (a, struct thread, elem);
+  struct thread *t2 = list_entry (b, struct thread, elem);
+  return t1->priority > t2->priority;
+}
+
+/* Compares wake time of threads a and b and returns 
+true if thread a has an earlier wake time*/
+bool compare_sleeping_thread (const struct list_elem *a,
                      const struct list_elem *b,
                      void *aux UNUSED)
 {
   struct thread *t1 = list_entry (a, struct thread, sleep_elem);
   struct thread *t2 = list_entry (b, struct thread, sleep_elem);
-
   return t1->wake_time < t2->wake_time;
 }
+
 void 
 add_to_sleeping_list(struct thread *t)
 {
+  lock_acquire (&sleeping_threads_lock);
   enum intr_level old_level = intr_disable ();
-  list_insert_ordered (&sleeping_threads_list, &(t->sleep_elem),
-                       cmp_sleeping_thread, NULL);
-  sema_down (t->wake_sema);
+  list_insert_ordered (&sleeping_list, &(t->sleep_elem),
+                       compare_sleeping_thread, NULL); 
   intr_set_level (old_level);
+  lock_release (&sleeping_threads_lock);
+  sema_down (t->wake_sema);
 }
 
 void 
 wake_sleeping_threads(int64_t time)
 {
   struct list_elem *cur;
-  while (!list_empty (&sleeping_threads_list))
+  while (!list_empty (&sleeping_list))
      {
-       cur = list_front (&sleeping_threads_list);
+       cur = list_front (&sleeping_list);
        struct thread *t = list_entry (cur, struct thread, sleep_elem);
        if (time < t->wake_time)
        {
