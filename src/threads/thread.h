@@ -101,6 +101,9 @@ struct thread
     struct list_elem elem;              /* List element. */
 
     struct list locks_held;             /* List of locks held by this thread. */
+    struct lock *waiting_lock;           /* Lock we are waiting for (if any)*/
+    bool blocked;       /* Indicates if the thread is blocked on a semaphore */
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */

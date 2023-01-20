@@ -70,6 +70,7 @@ sema_down (struct semaphore *sema)
     {
       list_insert_ordered(&sema->waiters, &thread_current ()->elem, 
                             compare_thread_priority, NULL);
+      thread_current()->blocked = true;               
       thread_block ();
     }
   sema->value--;
@@ -115,8 +116,12 @@ sema_up (struct semaphore *sema)
 
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+  {
+    struct thread *t = list_entry (list_pop_front (&sema->waiters),
+                                      struct thread, elem);
+    t->blocked = false;
+    thread_unblock (t);
+  }
   sema->value++;
   intr_set_level (old_level);
 }
@@ -201,11 +206,18 @@ lock_acquire (struct lock *lock)
   thread my current priority if mine is higher*/
   struct thread *cur = thread_current();
   struct thread *holder = lock->holder;
-  if(holder && cur->priority > holder->priority) {
-    holder->priority = cur->priority;
+  int levels = 0;
+  while (holder && levels <=8) 
+  {
+    if (!holder->blocked && cur->priority > holder->priority) 
+      holder->priority = cur->priority;
+    struct lock *temp_lock = holder->waiting_lock;
+    holder = (temp_lock) ? (temp_lock->holder) : (NULL);  
+    levels ++;
   }
-
+  cur->waiting_lock = lock;
   sema_down (&lock->semaphore);
+  cur->waiting_lock = NULL;
   lock->holder = thread_current ();
   list_push_back(&thread_current()->locks_held, &lock->locks_held_elem);
 }

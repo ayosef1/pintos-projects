@@ -487,6 +487,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->wake_time = 0;
   t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
+  t->waiting_lock = NULL;
+  t->blocked = false;
 
   /* Initialize the list of locks held by current list*/
   list_init (&t->locks_held);
