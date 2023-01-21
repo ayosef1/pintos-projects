@@ -96,6 +96,7 @@ struct thread
                                            should wake up */
     struct list_elem sleep_elem;        /* List element for sleeping threads
                                            list */ 
+    struct list_elem lock_elem;         /* List element for sema waiters list*/
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -154,6 +155,9 @@ void wake_sleeping_threads(int64_t time);
 bool compare_thread_priority (const struct list_elem *a,
                           const struct list_elem *b,
                           void *aux UNUSED);
+bool compare_waiter_priority (const struct list_elem *a,
+                           const struct list_elem *b,
+                           void *aux UNUSED);
 bool compare_sleeping_thread (const struct list_elem *a,
                           const struct list_elem *b,
                           void *aux UNUSED);
