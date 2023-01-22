@@ -350,7 +350,7 @@ thread_set_priority (int new_priority)
   if (!list_empty (&ready_list)) 
   {
     struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
-              compare_waiter_priority, NULL), struct thread, elem);
+              compare_ready_priority, NULL), struct thread, elem);
     if (highest_priority_ready->priority > new_priority)
       thread_yield();
   }
@@ -522,7 +522,7 @@ next_thread_to_run (void)
   else
   {
     struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
-              compare_waiter_priority, NULL), struct thread, elem);
+              compare_ready_priority, NULL), struct thread, elem);
     list_remove(&highest_priority_ready->elem);
     return highest_priority_ready;
   } 
@@ -618,13 +618,13 @@ uint32_t thread_stack_ofs = offsetof (struct thread, stack);
 /* Compares priorities of threads a and b and returns 
 true if thread a has a higher priority*/
 bool 
-compare_thread_priority (const struct list_elem *a,
+compare_ready_priority (const struct list_elem *a,
                      const struct list_elem *b,
                      void *aux UNUSED)
 {
   struct thread *t1 = list_entry (a, struct thread, elem);
   struct thread *t2 = list_entry (b, struct thread, elem);
-  return t1->priority > t2->priority;
+  return t1->priority < t2->priority;
 }
 
 /* Compares priorities of waiting threads a and b and returns 
@@ -634,8 +634,8 @@ compare_waiter_priority (const struct list_elem *a,
                      const struct list_elem *b,
                      void *aux UNUSED)
 {
-  struct thread *t1 = list_entry (a, struct thread, elem);
-  struct thread *t2 = list_entry (b, struct thread, elem);
+  struct thread *t1 = list_entry (a, struct thread, lock_elem);
+  struct thread *t2 = list_entry (b, struct thread, lock_elem);
   return t1->priority < t2->priority;
 }
 
