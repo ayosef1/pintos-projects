@@ -97,13 +97,9 @@ timer_sleep (int64_t ticks)
   
   struct thread *t = thread_current ();
 
-  struct semaphore sema;
-  sema_init (&sema, 0);
+  struct semaphore wake_sema;
 
-  t->wake_time = start + ticks;
-  t->wake_sema = &sema;
-  
-  add_to_sleeping_list(t);
+  thread_timer_sleep(t, &wake_sema, start + ticks);
 
 }
 
@@ -184,7 +180,7 @@ timer_interrupt (struct intr_frame *args UNUSED)
   ticks++;
   thread_tick ();
 
-  wake_sleeping_threads (ticks);
+  thread_wake_sleeping (ticks);
 
 }
 
