@@ -346,12 +346,16 @@ thread_set_priority (int new_priority)
   enum intr_level old_level;
   ASSERT (!intr_context ());
   old_level = intr_disable ();
-  thread_current ()->priority = new_priority;
+
+  struct thread *cur = thread_current ();
+  cur->original_priority = new_priority;
+  int new_effective = max_waiting_priority(cur);
+    cur->priority = new_effective;
   if (!list_empty (&ready_list)) 
   {
     struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
               compare_ready_priority, NULL), struct thread, elem);
-    if (highest_priority_ready->priority > new_priority)
+    if (highest_priority_ready->priority > new_effective)
       thread_yield();
   }
   intr_set_level (old_level);
@@ -615,8 +619,8 @@ allocate_tid (void)
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
 
-/* Compares priorities of threads a and b and returns 
-true if thread a has a higher priority*/
+/* Compares priorities of ready threads a and b and returns 
+true if thread a has a lower priority*/
 bool 
 compare_ready_priority (const struct list_elem *a,
                      const struct list_elem *b,
