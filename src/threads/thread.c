@@ -650,6 +650,31 @@ bool compare_sleeping_thread (const struct list_elem *a,
   return t1->wake_time < t2->wake_time;
 }
 
+/* Find the max priority of the threads waiting on all the locks 
+held by current thread */
+int max_waiting_priority (struct thread *cur)
+{
+  int new_priority = cur->original_priority;
+  struct list_elem *e;
+  for (e = list_begin (&cur->locks_held); e != list_end (&cur->locks_held);
+        e = list_next (e))
+  {
+    struct lock *lock_owned_by_current_thread = list_entry (e, struct lock, 
+                                                            locks_held_elem);
+    if(!list_empty (&lock_owned_by_current_thread->semaphore.waiters))
+    {
+      struct thread *highest_priority_waiter = list_entry (list_max (
+                      &lock_owned_by_current_thread->semaphore.waiters, 
+                      compare_waiter_priority, NULL), struct thread, lock_elem);
+      new_priority = ((new_priority) > (highest_priority_waiter->priority) ? 
+                          (new_priority) : (highest_priority_waiter->priority));
+    }
+  }
+  return new_priority;
+}
+
+
+
 void 
 add_to_sleeping_list(struct thread *t)
 {

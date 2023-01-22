@@ -161,6 +161,7 @@ bool compare_waiter_priority (const struct list_elem *a,
 bool compare_sleeping_thread (const struct list_elem *a,
                           const struct list_elem *b,
                           void *aux UNUSED);
+int max_waiting_priority (struct thread *cur);
 
 
 #endif /* threads/thread.h */
