@@ -28,7 +28,9 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
-/* List of sleeping threads */
+/* List all sleeping processes, that is, proccesses that are
+   blocked by a call to timer_sleep (). Ordered by time until
+   wakeup.  */
 static struct list sleeping_list;
 
 /* Idle thread. */
@@ -40,8 +42,9 @@ static struct thread *initial_thread;
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
-/* Lock to ensure only one thread accesses sleeping_threads_list at a time */
-static struct lock sleeping_threads_lock;
+/* Earliest wake time of sleeping thread measured in
+   ticks since boot */
+static int64_t next_wakeup;
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -96,10 +99,11 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
-  lock_init (&sleeping_threads_lock);
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleeping_list);
+
+  next_wakeup = INT64_MAX;
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -383,6 +387,23 @@ thread_get_recent_cpu (void)
   /* Not yet implemented. */
   return 0;
 }
+
+/* Returns the ealiest wakeup time for sleeping threads. */
+int64_t
+thread_get_next_wakeup (void)
+{
+  ASSERT( intr_get_level () == INTR_OFF );
+  return next_wakeup;
+}
+
+/* Sets the next_wakeup to NEW_WAKEUP. */
+void
+thread_set_next_wakeup (int64_t new_wakeup)
+{
+  ASSERT( intr_get_level () == INTR_OFF );
+  next_wakeup = new_wakeup;
+}
+
 
 /* Idle thread.  Executes when no other thread is ready to run.
 
@@ -470,8 +491,6 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
-  t->wake_time = 0;
-  t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -593,8 +612,8 @@ allocate_tid (void)
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
 
-/* Compares priorities of threads a and b and returns 
-true if thread a has a higher priority*/
+/* Compares wake time of threads corresponding to elem A and B
+and returns true if thread a has a higher priority time*/
 bool 
 compare_thread_priority (const struct list_elem *a,
                      const struct list_elem *b,
@@ -605,9 +624,10 @@ compare_thread_priority (const struct list_elem *a,
   return t1->priority > t2->priority;
 }
 
-/* Compares wake time of threads a and b and returns 
-true if thread a has an earlier wake time*/
-bool compare_sleeping_thread (const struct list_elem *a,
+/* Compares wake time of threads corresponding to elem A and B
+and returns true if thread a has an earlier wake time*/
+bool 
+compare_sleeping_thread (const struct list_elem *a,
                      const struct list_elem *b,
                      void *aux UNUSED)
 {
@@ -616,31 +636,58 @@ bool compare_sleeping_thread (const struct list_elem *a,
   return t1->wake_time < t2->wake_time;
 }
 
+/* Puts the thread T to sleep because of call to timer_sleep () until
+timer ticks >= WAKE_TIME and it is awoken by thread_wake_sleeping ().
+WAKE_SEMA is initialized assigned to T's wake_sema field.
+T's wake_time is set to WAKE_TIME. */
 void 
-add_to_sleeping_list(struct thread *t)
+thread_timer_sleep (struct thread *t, struct semaphore *wake_sema,
+                      int64_t wake_time)
 {
-  lock_acquire (&sleeping_threads_lock);
+  sema_init (wake_sema, 0);
+  t->wake_sema = wake_sema;
+  t->wake_time = wake_time;
+
   enum intr_level old_level = intr_disable ();
   list_insert_ordered (&sleeping_list, &(t->sleep_elem),
-                       compare_sleeping_thread, NULL); 
+                       compare_sleeping_thread, NULL);
+  
+  if (wake_time < thread_get_next_wakeup ())
+    thread_set_next_wakeup (wake_time);
+  
   intr_set_level (old_level);
-  lock_release (&sleeping_threads_lock);
   sema_down (t->wake_sema);
+  
+  t->wake_time = 0;
+  t->wake_sema = NULL;
 }
 
+/* Removes all threads from the sleeping list whose wake_time's are
+less than TIME. */
 void 
-wake_sleeping_threads(int64_t time)
+thread_wake_sleeping(int64_t time)
 {
+  if (thread_get_next_wakeup () > time) 
+    return;
+
   struct list_elem *cur;
-  while (!list_empty (&sleeping_list))
-     {
-       cur = list_front (&sleeping_list);
-       struct thread *t = list_entry (cur, struct thread, sleep_elem);
-       if (time < t->wake_time)
-       {
-        break;
-       }
-       list_remove (cur);
-       sema_up (t->wake_sema);
-     }
+  struct thread *t;
+
+  do
+    {
+      cur = list_front (&sleeping_list);
+      t = list_entry (cur, struct thread, sleep_elem);
+
+      if (time < t->wake_time)
+        {
+          thread_set_next_wakeup (t->wake_time);
+          return;
+        }
+      
+      list_remove (cur);
+      sema_up (t->wake_sema);
+    }
+  while (!list_empty (&sleeping_list));
+
+  thread_set_next_wakeup (INT64_MAX);
 }
