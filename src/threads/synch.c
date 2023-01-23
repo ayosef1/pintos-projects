@@ -218,7 +218,7 @@ lock_acquire (struct lock *lock)
   struct thread *comparison = thread_current();
   struct thread *holder = lock->holder;
 
-  while (holder && levels <=8) 
+  while (holder && levels < 8) 
   {
     /* Get the current thread effective priority*/
     int comparison_effective_priority = max_waiting_priority(comparison);
