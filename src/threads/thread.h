@@ -158,7 +158,7 @@ void thread_wake_sleeping (int64_t);
 bool compare_ready_priority (const struct list_elem *,
                           const struct list_elem *,
                           void * UNUSED);
-bool compare_thread_priority (const struct list_elem *,
+bool compare_waiter_priority (const struct list_elem *,
                           const struct list_elem *,
                           void * UNUSED);
 bool compare_sleeping_thread (const struct list_elem *,
