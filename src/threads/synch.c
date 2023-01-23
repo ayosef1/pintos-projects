@@ -123,6 +123,7 @@ sema_up (struct semaphore *sema)
     thread_unblock (highest_priority_waiter);
     thread_current ()->priority = 
               thread_max_waiting_priority (thread_current ());
+    
     if (highest_priority_waiter->priority > thread_current()->priority)
       {
         if (intr_context ())
@@ -250,10 +251,18 @@ lock_try_acquire (struct lock *lock)
 
   success = sema_try_down (&lock->semaphore);
   if (success)
-    lock->holder = thread_current ();
-    list_push_back (&thread_current ()->locks_held, &lock->locks_held_elem);
-    thread_current ()->priority = 
-            thread_max_waiting_priority (thread_current ());
+    {
+      enum intr_level old_level;
+      old_level = intr_disable ();
+
+      thread_current()->waiting_lock = NULL;
+      lock->holder = thread_current ();
+      list_push_back (&thread_current ()->locks_held, &lock->locks_held_elem);
+      thread_current ()->priority = 
+              thread_max_waiting_priority (thread_current ());
+      
+      intr_set_level (old_level);
+    }
   return success;
 }
 
