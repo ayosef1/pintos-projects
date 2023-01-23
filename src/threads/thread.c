@@ -361,6 +361,7 @@ thread_set_priority (int new_priority)
   {
     struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
               compare_ready_priority, NULL), struct thread, elem);
+    
     if (highest_priority_ready->priority > cur->priority)
       thread_yield();
   }
@@ -496,7 +497,6 @@ init_thread (struct thread *t, const char *name, int priority)
   t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
   t->waiting_lock = NULL;
-  t->blocked = false;
 
   /* Initialize the list of locks held by current list*/
   list_init (&t->locks_held);
