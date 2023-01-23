@@ -87,7 +87,8 @@ struct thread
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Priority. */
+    int priority;                       /* Effective Priority. */
+    int original_priority;              /* Original Priority (Never Changes). */
     struct list_elem allelem;           /* List element for all threads list. */
     int64_t wake_time;                  /* Time at which thread should wake
                                            after put to sleep */
@@ -95,9 +96,14 @@ struct thread
                                            should wake up */
     struct list_elem sleep_elem;        /* List element for sleeping threads
                                            list */ 
+    struct list_elem lock_elem;         /* List element for sema waiters list*/
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+
+    struct list locks_held;             /* List of locks held by this thread. */
+    struct lock *waiting_lock;           /* Lock we are waiting for (if any)*/
+    bool blocked;       /* Indicates if the thread is blocked on a semaphore */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -143,18 +149,25 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
 int64_t thread_get_next_wakeup (void);
 void thread_set_next_wakeup (int64_t);
 
 void thread_timer_sleep (struct thread *, struct semaphore *,
                    int64_t);
 void thread_wake_sleeping (int64_t);
+
+bool compare_ready_priority (const struct list_elem *,
+                          const struct list_elem *,
+                          void * UNUSED);
 bool compare_thread_priority (const struct list_elem *,
                           const struct list_elem *,
                           void * UNUSED);
 bool compare_sleeping_thread (const struct list_elem *,
                           const struct list_elem *,
                           void * UNUSED);
+int max_waiting_priority (struct thread *);
+
 
 
 #endif /* threads/thread.h */

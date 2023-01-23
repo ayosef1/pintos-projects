@@ -213,6 +213,8 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  if (t->priority > thread_get_priority())
+    thread_yield ();
   return tid;
 }
 
@@ -244,12 +246,10 @@ void
 thread_unblock (struct thread *t) 
 {
   enum intr_level old_level;
-
   ASSERT (is_thread (t));
-
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_insert_ordered(&ready_list, &t->elem, compare_thread_priority, NULL);
+  list_push_back(&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -320,7 +320,7 @@ thread_yield (void)
 
   old_level = intr_disable ();
   if (cur != idle_thread)
-    list_insert_ordered(&ready_list, &cur->elem, compare_thread_priority, NULL);
+    list_push_back(&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -347,7 +347,28 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  enum intr_level old_level;
+  ASSERT (!intr_context ());
+  old_level = intr_disable ();
+
+  struct thread *cur = thread_current ();
+
+  bool change_priority = cur->original_priority == cur->priority
+                         || new_priority > cur->priority;
+
+  if (change_priority)
+    cur->priority = new_priority;
+
+  cur->original_priority = new_priority;
+
+  if (!list_empty (&ready_list)) 
+  {
+    struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
+              compare_ready_priority, NULL), struct thread, elem);
+    if (highest_priority_ready->priority > cur->priority)
+      thread_yield();
+  }
+  intr_set_level (old_level);
 }
 
 /* Returns the current thread's priority. */
@@ -491,7 +512,15 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->original_priority = priority;
+  t->wake_time = 0;
+  t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
+  t->waiting_lock = NULL;
+  t->blocked = false;
+
+  /* Initialize the list of locks held by current list*/
+  list_init (&t->locks_held);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -522,7 +551,12 @@ next_thread_to_run (void)
   if (list_empty (&ready_list))
     return idle_thread;
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  {
+    struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
+              compare_ready_priority, NULL), struct thread, elem);
+    list_remove (&highest_priority_ready->elem);
+    return highest_priority_ready;
+  } 
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -612,16 +646,29 @@ allocate_tid (void)
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
 
-/* Compares wake time of threads corresponding to elem A and B
+
+/* Compares priorities time of threads corresponding to elem A and B
 and returns true if thread a has a higher priority time*/
 bool 
-compare_thread_priority (const struct list_elem *a,
+compare_ready_priority (const struct list_elem *a,
                      const struct list_elem *b,
                      void *aux UNUSED)
 {
   struct thread *t1 = list_entry (a, struct thread, elem);
   struct thread *t2 = list_entry (b, struct thread, elem);
-  return t1->priority > t2->priority;
+  return t1->priority < t2->priority;
+}
+
+/* Compares priorities of waiting threads A and B and returns 
+true if thread a has a lower priority*/
+bool 
+compare_waiter_priority (const struct list_elem *a,
+                     const struct list_elem *b,
+                     void *aux UNUSED)
+{
+  struct thread *t1 = list_entry (a, struct thread, lock_elem);
+  struct thread *t2 = list_entry (b, struct thread, lock_elem);
+  return t1->priority < t2->priority;
 }
 
 /* Compares wake time of threads corresponding to elem A and B
@@ -634,6 +681,30 @@ compare_sleeping_thread (const struct list_elem *a,
   struct thread *t1 = list_entry (a, struct thread, sleep_elem);
   struct thread *t2 = list_entry (b, struct thread, sleep_elem);
   return t1->wake_time < t2->wake_time;
+}
+
+/* Find the max priority of the threads waiting on all the locks 
+held by current thread */
+int
+max_waiting_priority (struct thread *cur)
+{
+  int new_priority = cur->original_priority;
+  struct list_elem *e;
+  for (e = list_begin (&cur->locks_held); e != list_end (&cur->locks_held);
+        e = list_next (e))
+    {
+      struct lock *lock_owned_by_current_thread = list_entry (e, struct lock, 
+                                                              locks_held_elem);
+      if(!list_empty (&lock_owned_by_current_thread->semaphore.waiters))
+        {
+          struct thread *highest_priority_waiter = list_entry (list_max (
+                          &lock_owned_by_current_thread->semaphore.waiters, 
+                          compare_waiter_priority, NULL), struct thread, lock_elem);
+          new_priority = ((new_priority) > (highest_priority_waiter->priority) ? 
+                            (new_priority) : (highest_priority_waiter->priority));
+        }
+    }
+  return new_priority;
 }
 
 /* Puts the thread T to sleep because of call to timer_sleep () until
