@@ -103,8 +103,6 @@ struct thread
 
     struct list locks_held;             /* List of locks held by this thread. */
     struct lock *waiting_lock;           /* Lock we are waiting for (if any)*/
-    bool blocked;       /* Indicates if the thread is blocked on a semaphore */
-
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -156,17 +154,11 @@ void thread_set_next_wakeup (int64_t);
 void thread_timer_sleep (struct thread *, struct semaphore *,
                    int64_t);
 void thread_wake_sleeping (int64_t);
+int thread_max_waiting_priority (struct thread *);
 
-bool compare_ready_priority (const struct list_elem *,
+bool compare_waiter_priority (const struct list_elem *,
                           const struct list_elem *,
                           void * UNUSED);
-bool compare_thread_priority (const struct list_elem *,
-                          const struct list_elem *,
-                          void * UNUSED);
-bool compare_sleeping_thread (const struct list_elem *,
-                          const struct list_elem *,
-                          void * UNUSED);
-int max_waiting_priority (struct thread *);
 
 
 
