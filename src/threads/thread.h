@@ -161,9 +161,6 @@ bool compare_ready_priority (const struct list_elem *,
 bool compare_waiter_priority (const struct list_elem *,
                           const struct list_elem *,
                           void * UNUSED);
-bool compare_sleeping_thread (const struct list_elem *,
-                          const struct list_elem *,
-                          void * UNUSED);
 int max_waiting_priority (struct thread *);
 
 

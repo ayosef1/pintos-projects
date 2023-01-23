@@ -79,6 +79,13 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+static bool compare_sleeping_thread (const struct list_elem *,
+                          const struct list_elem *,
+                          void * UNUSED);
+
+static bool compare_ready_priority (const struct list_elem *,
+                          const struct list_elem *,
+                          void * UNUSED);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -674,7 +681,7 @@ compare_waiter_priority (const struct list_elem *a,
 /* Compares wake time of threads corresponding to elem A and B
 and returns true if thread a has an earlier wake time*/
 bool 
-compare_sleeping_thread (const struct list_elem *a,
+compare_sleeping_wake_time (const struct list_elem *a,
                      const struct list_elem *b,
                      void *aux UNUSED)
 {
@@ -684,7 +691,7 @@ compare_sleeping_thread (const struct list_elem *a,
 }
 
 /* Find the max priority of the threads waiting on all the locks 
-held by current thread */
+held by the thread CUR */
 int
 max_waiting_priority (struct thread *cur)
 {
@@ -736,7 +743,7 @@ thread_timer_sleep (struct thread *t, struct semaphore *wake_sema,
 /* Removes all threads from the sleeping list whose wake_time's are
 less than TIME. */
 void 
-thread_wake_sleeping(int64_t time)
+thread_wake_sleeping (int64_t time)
 {
   if (thread_get_next_wakeup () > time) 
     return;
