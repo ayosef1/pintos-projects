@@ -220,9 +220,12 @@ lock_acquire (struct lock *lock)
 
   while (holder && levels <=8) 
   {
-    /* Get the current thread effective priority*/
+    /* Get and set the current thread effective priority*/
     int comparison_effective_priority = max_waiting_priority(comparison);
-
+    if (comparison_effective_priority > comparison->priority)
+      comparison->priority = comparison_effective_priority;
+    
+    /* Donate if current thread effective priority is higher than lock holder*/
     if (comparison->priority > holder->priority) 
       holder->priority = comparison->priority;
     comparison = holder;
