@@ -155,13 +155,10 @@ void thread_timer_sleep (struct thread *, struct semaphore *,
                    int64_t);
 void thread_wake_sleeping (int64_t);
 
-bool compare_ready_priority (const struct list_elem *,
-                          const struct list_elem *,
-                          void * UNUSED);
 bool compare_waiter_priority (const struct list_elem *,
                           const struct list_elem *,
                           void * UNUSED);
-int max_waiting_priority (struct thread *);
+int thread_max_waiting_priority (struct thread *);
 
 
 
