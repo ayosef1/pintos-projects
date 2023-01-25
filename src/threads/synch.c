@@ -121,8 +121,6 @@ sema_up (struct semaphore *sema)
               compare_waiter_priority, NULL), struct thread, lock_elem);
     list_remove (&highest_priority_waiter->lock_elem);
     thread_unblock (highest_priority_waiter);
-    thread_current ()->priority = 
-              thread_max_waiting_priority (thread_current ());
     
     if (highest_priority_waiter->priority > thread_current()->priority)
       {
