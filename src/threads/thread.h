@@ -157,28 +157,18 @@ int thread_get_priority (void);
 void thread_set_priority (int);
 
 int thread_get_nice (void);
-void thread_set_nice (int);
+void thread_set_nice (int nice);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
-void update_all_recent_cpu_times (void);
-void update_system_load_avg (void);
-void calc_recent_cpu_time (struct thread *t, void *aux UNUSED);
-int bound (int x, int lower, int upper);
-void update_all_priorities (void);
-void calc_priority (struct thread *t, void *aux UNUSED);
 
 int64_t thread_get_next_wakeup (void);
 void thread_set_next_wakeup (int64_t);
 
-void thread_timer_sleep (struct thread *, struct semaphore *,
-                   int64_t);
+void thread_timer_sleep (struct thread *t, struct semaphore *wake_sema,
+                   int64_t wake_time);
 void thread_wake_sleeping (int64_t);
 int thread_max_waiting_priority (struct thread *);
-
-bool compare_waiter_priority (const struct list_elem *,
-                          const struct list_elem *,
-                          void * UNUSED);
-bool compare_thread_priority (const struct list_elem *,
-                          const struct list_elem *,
-                          void * UNUSED);
+bool thread_compare_priority (const struct list_elem *a,
+                          const struct list_elem *b,
+                          void *aux UNUSED);
 #endif /* threads/thread.h */

@@ -123,7 +123,7 @@ sema_up (struct semaphore *sema)
   if (!list_empty (&sema->waiters)) 
   {
     struct thread *highest_priority_waiter = list_entry (list_max (&sema->waiters, 
-              compare_thread_priority, NULL), struct thread, elem);
+              thread_compare_priority, NULL), struct thread, elem);
     list_remove (&highest_priority_waiter->elem);
     thread_unblock (highest_priority_waiter);
     
@@ -445,7 +445,7 @@ compare_semaphore_elem (const struct list_elem *a,
   struct semaphore_elem *elem1 = list_entry (a, struct semaphore_elem, elem);
   struct semaphore_elem *elem2 = list_entry (b, struct semaphore_elem, elem);
 
-  return compare_thread_priority (list_front (&elem1->semaphore.waiters),
+  return thread_compare_priority (list_front (&elem1->semaphore.waiters),
                                   list_front (&elem2->semaphore.waiters),
                                   NULL);
 }
