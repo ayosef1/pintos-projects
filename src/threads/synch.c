@@ -32,6 +32,10 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+static bool compare_semaphore_elem (const struct list_elem *,
+                             const struct list_elem *,
+                             void *aux);
+
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -390,13 +394,13 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock_held_by_current_thread (lock));
 
   if (!list_empty (&cond->waiters))
-  {
-    struct list_elem *highest_priority_waiter = list_max (&cond->waiters, 
-              compare_semaphore_elem, NULL);
-    list_remove (highest_priority_waiter);
-    sema_up (&list_entry (highest_priority_waiter, struct semaphore_elem,
-                          elem)->semaphore);
-  }
+    {
+      struct list_elem *highest_priority_waiter = list_max (&cond->waiters,
+                compare_semaphore_elem, NULL);
+      list_remove (highest_priority_waiter);
+      sema_up (&list_entry (highest_priority_waiter, struct semaphore_elem,
+                            elem)->semaphore);
+    }
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by
@@ -432,7 +436,10 @@ lock_priority_donate (struct lock *lock, int new_priority, int level)
     }
 }
 
-bool 
+/* Compares priorities of threads waiting in the semaphores
+of semaphore_elem A and B and returns true if thread waiting
+on semaphore in A has a higher priority */
+static bool
 compare_semaphore_elem (const struct list_elem *a,
                         const struct list_elem *b,
                         void *aux UNUSED)
@@ -440,7 +447,7 @@ compare_semaphore_elem (const struct list_elem *a,
   struct semaphore_elem *elem1 = list_entry (a, struct semaphore_elem, elem);
   struct semaphore_elem *elem2 = list_entry (b, struct semaphore_elem, elem);
 
-  return compare_thread_priority(list_front(&elem1->semaphore.waiters),
-                                list_front(&elem2->semaphore.waiters),
-                                NULL);
+  return compare_thread_priority (list_front (&elem1->semaphore.waiters),
+                                  list_front (&elem2->semaphore.waiters),
+                                  NULL);
 }
