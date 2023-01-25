@@ -238,8 +238,6 @@ lock_acquire (struct lock *lock)
       /* Current Thread is the holder */
       lock->holder = thread_current ();
       list_push_back (&thread_current ()->locks_held, &lock->locks_held_elem);
-      thread_current ()->priority = 
-              thread_max_waiting_priority (thread_current ());
     }
   intr_set_level (old_level);
 }
@@ -272,8 +270,6 @@ lock_try_acquire (struct lock *lock)
         lock->holder = thread_current ();
 
         list_push_back (&thread_current ()->locks_held, &lock->locks_held_elem);
-        thread_current ()->priority = 
-                thread_max_waiting_priority (thread_current ());
         
         intr_set_level (old_level);
       }

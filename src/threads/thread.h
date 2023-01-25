@@ -106,8 +106,6 @@ struct thread
     struct semaphore *wake_sema;        /* Used to indicate sleeping thread 
                                            should wake up. */
     struct list_elem sleep_elem;        /* List element for sleeping threads
-                                           list. */ 
-    struct list_elem sema_elem;         /* List element for sema waiters 
                                            list. */
     struct list_elem allelem;           /* List element for all threads list. */
 
