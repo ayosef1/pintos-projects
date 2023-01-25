@@ -43,10 +43,6 @@ static struct thread *initial_thread;
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
-/* Earliest wake time of sleeping thread measured in
-   ticks since boot */
-static int64_t next_wakeup;
-
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
   {
@@ -124,8 +120,6 @@ thread_init (void)
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleeping_list);
-
-  next_wakeup = INT64_MAX;
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -472,22 +466,6 @@ thread_get_recent_cpu (void)
   return fp_to_int (mult_fp_by_int (cur->recent_cpu_time, 100));
 }
 
-/* Returns the ealiest wakeup time for sleeping threads. */
-int64_t
-thread_get_next_wakeup (void)
-{
-  ASSERT( intr_get_level () == INTR_OFF );
-  return next_wakeup;
-}
-
-/* Sets the next_wakeup to NEW_WAKEUP. */
-void
-thread_set_next_wakeup (int64_t new_wakeup)
-{
-  ASSERT( intr_get_level () == INTR_OFF );
-  next_wakeup = new_wakeup;
-}
-
 
 /* Idle thread.  Executes when no other thread is ready to run.
 
@@ -585,15 +563,15 @@ init_thread (struct thread *t, const char *name, int priority)
     /* Initial thread has recent cpu time and nice value of 0.
        Other threads inherit these values from their parent. */
     if (t == initial_thread)
-    {
-      t->niceness = NICE_INITIAL;
-      t->recent_cpu_time = RECENT_CPU_TIME_INITIAL;
-    }
+      {
+        t->niceness = NICE_INITIAL;
+        t->recent_cpu_time = RECENT_CPU_TIME_INITIAL;
+      }
     else 
-    {
-      t->niceness = thread_get_nice ();
-      t->recent_cpu_time = int_to_fp (thread_current ()->recent_cpu_time);
-    }
+      {
+        t->niceness = thread_get_nice ();
+        t->recent_cpu_time = int_to_fp (thread_current ()->recent_cpu_time);
+      }
     update_mlfs_priority (t, NULL);
   }
 
@@ -700,9 +678,6 @@ thread_timer_sleep (struct thread *t, struct semaphore *wake_sema,
   list_insert_ordered (&sleeping_list, &(t->sleep_elem),
                        compare_wake_time, NULL);
   
-  if (wake_time < thread_get_next_wakeup ())
-    thread_set_next_wakeup (wake_time);
-  
   intr_set_level (old_level);
   sema_down (t->wake_sema);
   
@@ -715,29 +690,22 @@ less than TIME. */
 void 
 thread_wake_sleeping (int64_t time)
 {
-  if (thread_get_next_wakeup () > time) 
-    return;
-
   struct list_elem *cur;
   struct thread *t;
 
-  do
+  while (!list_empty (&sleeping_list))
     {
       cur = list_front (&sleeping_list);
       t = list_entry (cur, struct thread, sleep_elem);
 
       if (time < t->wake_time)
         {
-          thread_set_next_wakeup (t->wake_time);
           return;
         }
       
       list_remove (cur);
       sema_up (t->wake_sema);
     }
-  while (!list_empty (&sleeping_list));
-
-  thread_set_next_wakeup (INT64_MAX);
 }
 
 /* Find the max priority of the threads waiting on all the locks 
