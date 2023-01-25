@@ -195,6 +195,8 @@ determine the threads `priority` in tandem with donation.
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
 >> .png file.)
 
+Link to diagram: https://web.stanford.edu/~martigp/%20pri_donation.png
+
 No new data structure is used to track priority donation. Instead it 
 is tracked through bookkeeping inside the `thread` and `lock` structs
 (with the new methods listed above). In particular, when a thread fails
