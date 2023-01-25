@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/fixed-point.h"
+
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -23,6 +25,13 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+
+#define NICE_MIN -20                    /* Lowest nice value. */
+#define NICE_INITIAL 0                  /* Initial thread's nice value. */
+#define NICE_MAX 20                     /* Highest nice value. */
+
+#define RECENT_CPU_TIME_INITIAL 0       /* Initial thread's recent cpu time. */
+
 
 /* A kernel thread or user process.
 
@@ -88,15 +97,17 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Effective Priority. */
-    int original_priority;              /* Original Priority (Never Changes). */
-    struct list_elem allelem;           /* List element for all threads list. */
+    int original_priority;              /* Non-donated Priority. */
+    int niceness;                       /* Nice value. */
     int64_t wake_time;                  /* Time at which thread should wake
-                                           after put to sleep */
+                                           after being put to sleep. */
+    fixed_point recent_cpu_time;        /* Exponentially weighted moving 
+                                           average of recent CPU time. */
     struct semaphore *wake_sema;        /* Used to indicate sleeping thread 
-                                           should wake up */
+                                           should wake up. */
     struct list_elem sleep_elem;        /* List element for sleeping threads
-                                           list */ 
-    struct list_elem lock_elem;         /* List element for sema waiters list*/
+                                           list. */
+    struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -144,22 +155,18 @@ int thread_get_priority (void);
 void thread_set_priority (int);
 
 int thread_get_nice (void);
-void thread_set_nice (int);
+void thread_set_nice (int nice);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 int64_t thread_get_next_wakeup (void);
 void thread_set_next_wakeup (int64_t);
 
-void thread_timer_sleep (struct thread *, struct semaphore *,
-                   int64_t);
+void thread_timer_sleep (struct thread *t, struct semaphore *wake_sema,
+                   int64_t wake_time);
 void thread_wake_sleeping (int64_t);
 int thread_max_waiting_priority (struct thread *);
-
-bool compare_waiter_priority (const struct list_elem *,
-                          const struct list_elem *,
-                          void * UNUSED);
-
-
-
+bool thread_compare_priority (const struct list_elem *a,
+                          const struct list_elem *b,
+                          void *aux UNUSED);
 #endif /* threads/thread.h */
