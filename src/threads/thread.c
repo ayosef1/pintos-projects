@@ -67,6 +67,8 @@ bool thread_mlfqs;
 
 /* Estimate of average number of threads ready to run over the past minute. */
 static fixed_point load_avg;
+
+/* The number of threads in the ready_list */
 static int num_ready;
 
 
@@ -454,7 +456,7 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void) 
 {
-  return fp_to_int (mult_fp_by_int (load_avg, 100));
+  return fp_to_int (mult_fp_by_int (load_avg, PRINT_FP_CONST));
 }
 
 /* Returns 100 times the current thread's recent_cpu value,
@@ -463,7 +465,7 @@ int
 thread_get_recent_cpu (void) 
 {
   struct thread *cur = thread_current ();
-  return fp_to_int (mult_fp_by_int (cur->recent_cpu_time, 100));
+  return fp_to_int (mult_fp_by_int (cur->recent_cpu_time, PRINT_FP_CONST));
 }
 
 
@@ -811,24 +813,21 @@ update_all_priorities (void) {
   thread_foreach (update_mlfs_priority, NULL);
 }
 
-/* Recalculates system load average according to this formula: 
+/* Updates system load average according to this formula: 
    load_avg = (59/60)*load_avg + (1/60)*ready_threads. */
 static void
 update_system_load_avg (void)
 {
-  fixed_point coeff1;
-  fixed_point coeff2;
   int ready_threads = num_ready;
 
-  if (thread_current () != idle_thread) ready_threads++;
+  if (thread_current () != idle_thread) 
+    ready_threads++;
 
-  coeff1 = fp_div (int_to_fp (59), int_to_fp (60));
-  coeff2 = fp_div (int_to_fp (1), int_to_fp (60));
-  load_avg = fp_add (fp_mult (coeff1, load_avg),
-                     mult_fp_by_int (coeff2, ready_threads));
+  load_avg = fp_add (fp_mult (LOAD_WEIGHT, load_avg),
+                     mult_fp_by_int (READY_WEIGHT, ready_threads));
 }
 
-/* Calculates a thead's recent_cpu according to this formula:
+/* Updates a thead's recent_cpu according to this formula:
    (2*load_avg)/(2*load_avg + 1) * recent_cpu + nice */
 static void
 update_recent_cpu_time (struct thread *t, void *aux UNUSED)
@@ -843,7 +842,7 @@ update_recent_cpu_time (struct thread *t, void *aux UNUSED)
   t->recent_cpu_time = add_int_to_fp (scaled_recent_cpu, t->niceness);
 }
 
-/* Calculates a thead's priority according to this formula:
+/* Updates a thead's priority according to this formula:
    priority = PRI_MAX - (recent_cpu / 4) - (nice * 2) */
 static void
 update_mlfs_priority (struct thread *t, void *aux UNUSED)
