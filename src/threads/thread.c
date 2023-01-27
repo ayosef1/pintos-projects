@@ -421,7 +421,14 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+  enum intr_level old_level;
+  int priority;
+
+  old_level = intr_disable ();
+  priority = thread_current ()->priority;
+  intr_set_level (old_level);
+
+  return priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -448,7 +455,14 @@ thread_set_nice (int nice)
 int
 thread_get_nice (void) 
 {
-  return thread_current ()->niceness;
+  enum intr_level old_level;
+  int nice;
+
+  old_level = intr_disable ();
+  nice = thread_current ()->niceness;
+  intr_set_level (old_level);
+
+  return nice;
 }
 
 /* Returns 100 times the system load average,
@@ -456,7 +470,14 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void) 
 {
-  return fp_to_int (mult_fp_by_int (load_avg, PRINT_FP_CONST));
+  enum intr_level old_level;
+  int scaled_load_avg;
+
+  old_level = intr_disable ();
+  scaled_load_avg = fp_to_int (mult_fp_by_int (load_avg, PRINT_FP_CONST));
+  intr_set_level (old_level);
+
+  return scaled_load_avg;
 }
 
 /* Returns 100 times the current thread's recent_cpu value,
@@ -464,8 +485,17 @@ thread_get_load_avg (void)
 int
 thread_get_recent_cpu (void) 
 {
+  enum intr_level old_level;
+  int scaled_recent_cpu_time;
+
+  old_level = intr_disable ();
   struct thread *cur = thread_current ();
-  return fp_to_int (mult_fp_by_int (cur->recent_cpu_time, PRINT_FP_CONST));
+  scaled_recent_cpu_time = fp_to_int (mult_fp_by_int (cur->recent_cpu_time,
+                                                      PRINT_FP_CONST));
+  intr_set_level (old_level);
+  
+  return scaled_recent_cpu_time;
+
 }
 
 
@@ -835,6 +865,7 @@ update_system_load_avg (void)
 static void
 update_recent_cpu_time (struct thread *t, void *aux UNUSED)
 {
+  fixed_point new_time;
   fixed_point double_load_avg;
   fixed_point coeff;
   fixed_point scaled_recent_cpu;
@@ -842,8 +873,11 @@ update_recent_cpu_time (struct thread *t, void *aux UNUSED)
   double_load_avg = mult_fp_by_int(load_avg, 2);
   coeff = fp_div (double_load_avg, add_int_to_fp (double_load_avg, 1));
   scaled_recent_cpu = fp_mult (coeff, t->recent_cpu_time);
-  t->recent_cpu_time = add_int_to_fp (scaled_recent_cpu, t->niceness);
-  t->recent_cpu_changed = true;
+  new_time = add_int_to_fp (scaled_recent_cpu, t->niceness);
+
+  /* Check if recent CPU time changed. */
+  t->recent_cpu_changed = t->recent_cpu_time != new_time;
+  t->recent_cpu_time = new_time;
 }
 
 /* Updates a thead's priority according to this formula:
