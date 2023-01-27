@@ -353,6 +353,9 @@ New members added to `struct thread`:
 
       fixed_point recent_cpu_time;        /* Exponentially weighted moving 
                                            average of recent CPU time. */
+      bool recent_cpu_changed             /* Whether the thread has had
+                                             CPU time since last priority
+                                             update */
                                       
 
 
@@ -386,15 +389,23 @@ after the priority changed on ticks where both ought should be change
 (i.e. every 4 ticks). Similarly, whether the priority should be calculated
 before or after a thread yields. In this case we decided to change the
 `recent_cpu_time` prior to changing priority on ticks where the two coincided.
+Similarly, we decided that yielding would happen after priorities were changed.
 
 >> C4: How is the way you divided the cost of scheduling between code
 >> inside and outside interrupt context likely to affect performance?
 
-In our implementation all of the scheduling occurs inside an interrupt
-context. We maintain a single queue instead of a different queue for
-each priority. Functionally this behaves the same way as it.
+In our implementation, most of the cost of scheduling occurs inside the
+interrupt context. This is because the data updates are such that they need
+to be executed immediately after a timer interrupt has occured. If they
+were not executed in a handler, it would require synchronization primitives,
+which risk updates being blocked. This is highly undesirable given 
+the importance of the temporal locality of each of this data (such as 
+each threads recent cpu time) to be useful for scheduling decisions.
 
-// Heavy calculations are gonna harm performance. 
+This does mean however that a number of expensive operations are occuring
+while interrupts are disabled, which will likely affect performance.
+This is especially pronounced given the frequency that these interrupts 
+(and thus calculations and scheduling reconfigurations) are happening.
 
 ---- RATIONALE ----
 
@@ -409,16 +420,28 @@ each priority. Functionally this behaves the same way as the list_max
 function's selection criteria is priority and then proximity to the
 head as a tie breaker. Since adding to the queue is done using push back
 this means that round robin ordering is respected for threads with the
-same priority.
+same priority. Moreover, insertion is O(1) and removal of the highest
+priority thread is O(N).
 
 The advantage of this design is once again in its simplicity. Maintaining
-more than one queue means that threads will be changing 
-an operation that is expensive. In our case, we simply need to push update
-thread priorities correctly and push threads to the back of the queue once
-their tiem slice is done and the list_max function will abstract the
-remaining scheduling functionality.
+more than one queue means that threads will be changing queues when their
+priority changes. This change would still be O(1) on account of the
+because removal with the list.c implementation is still O(1) and we would just
+be puhing to the back of its new queue. Conversely, with our single queue,
+priority change does nothing to a thread's position.
 
-The disadvantage is in its inefficiency. Having a single queue means that 
+The advantage of the several queues, there is an O(1) search
+time for the highest priority non-empty queue as it is bounded by 64.
+Similarly, removal of the highest priority thread is O(1) since we just
+remove the first element because of round robin scheduling within each queue.
+This means finding the highest priority thread is O(1). This is a significant
+improvement on the single queue.
+
+To minimize the time spend in the handler, we use a boolean member in the
+thread struct to track whether the recent CPU has changed and therefore
+whether a priority recalculation needs to occur.
+
+
 
 >> C6: The assignment explains arithmetic for fixed-point math in
 >> detail, but it leaves it open to you to implement it.  Why did you
