@@ -184,7 +184,6 @@ thread_tick (void)
       /* Update all priorities every fourth tick. */
       if (timer_ticks () % TIME_SLICE == 0) 
         update_all_priorities ();
-
     }
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -555,7 +554,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->original_priority = priority;
   t->wake_time = 0;
-  t->recent_cpu_changed = false;
+  t->recent_cpu_changed = true;
   t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
   t->waiting_lock = NULL;
@@ -567,13 +566,15 @@ init_thread (struct thread *t, const char *name, int priority)
       {
         t->niceness = NICE_INITIAL;
         t->recent_cpu_time = RECENT_CPU_TIME_INITIAL;
+        t->priority = PRI_DEFAULT;
+        t->recent_cpu_changed = false;
       }
     else 
       {
         t->niceness = thread_get_nice ();
         t->recent_cpu_time = int_to_fp (thread_current ()->recent_cpu_time);
+        update_mlfqs_priority(t, NULL);
       }
-    update_mlfqs_priority (t, NULL);
   }
 
   /* Initialize the list of locks held by current list*/
@@ -857,7 +858,7 @@ static void
 update_mlfqs_priority (struct thread *t, void *aux UNUSED)
 {
 
-  if (t->recent_cpu_changed)
+  if (t != idle_thread && t->recent_cpu_changed)
     {
       fixed_point unbounded_priority;
   
