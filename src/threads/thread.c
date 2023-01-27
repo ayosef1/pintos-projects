@@ -767,8 +767,8 @@ thread_max_waiting_priority (struct thread * cur)
                           &lock_owned_by_current_thread->semaphore.waiters, 
                           thread_compare_priority, NULL), struct thread, elem);
           
-          new_priority = ((new_priority) > (highest_priority_waiter->priority) ? 
-                            (new_priority) : (highest_priority_waiter->priority));
+          new_priority = (new_priority) > (highest_priority_waiter->priority) ? 
+                          (new_priority) : (highest_priority_waiter->priority);
         }
     }
   return new_priority;
@@ -899,7 +899,8 @@ update_mlfqs_priority (struct thread *t, void *aux UNUSED)
       unbounded_priority = int_to_fp (PRI_MAX);
       unbounded_priority = fp_sub (unbounded_priority,
                                   div_fp_by_int (t->recent_cpu_time, 4));
-      unbounded_priority = sub_int_from_fp (unbounded_priority, t->niceness * 2);
+      unbounded_priority = sub_int_from_fp (unbounded_priority, 
+                                            t->niceness * 2);
       t->priority = bound (fp_to_int (unbounded_priority),
                           PRI_MIN, PRI_MAX);
 
