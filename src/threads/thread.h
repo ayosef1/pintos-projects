@@ -101,6 +101,8 @@ struct thread
     int niceness;                       /* Nice value. */
     int64_t wake_time;                  /* Time at which thread should wake
                                            after being put to sleep. */
+    bool recent_cpu_changed;            /* Had recent_cpu change since last
+                                           priority change */
     fixed_point recent_cpu_time;        /* Exponentially weighted moving 
                                            average of recent CPU time. */
     struct semaphore *wake_sema;        /* Used to indicate sleeping thread 
@@ -113,7 +115,7 @@ struct thread
     struct list_elem elem;              /* List element. */
 
     struct list locks_held;             /* List of locks held by this thread. */
-    struct lock *waiting_lock;           /* Lock we are waiting for (if any)*/
+    struct lock *waiting_lock;          /* Lock we are waiting for (if any)*/
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */

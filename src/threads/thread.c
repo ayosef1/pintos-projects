@@ -40,6 +40,9 @@ static struct thread *idle_thread;
 /* Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
 
+/* Waking thread for waking up threads in */
+static struct thread *waking_thread;
+
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
@@ -170,6 +173,7 @@ thread_tick (void)
         the running thread only, unless the idle thread is running. */
       if (t != idle_thread) 
         {
+          t->recent_cpu_changed = true;
           t->recent_cpu_time = add_int_to_fp (t->recent_cpu_time, 1);
         }
       /* Update system load average and recalculate
@@ -557,6 +561,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->original_priority = priority;
   t->wake_time = 0;
+  t->recent_cpu_changed = false;
   t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
   t->waiting_lock = NULL;
@@ -840,6 +845,7 @@ update_recent_cpu_time (struct thread *t, void *aux UNUSED)
   coeff = fp_div (double_load_avg, add_int_to_fp (double_load_avg, 1));
   scaled_recent_cpu = fp_mult (coeff, t->recent_cpu_time);
   t->recent_cpu_time = add_int_to_fp (scaled_recent_cpu, t->niceness);
+  t->recent_cpu_changed = true;
 }
 
 /* Updates a thead's priority according to this formula:
@@ -847,14 +853,20 @@ update_recent_cpu_time (struct thread *t, void *aux UNUSED)
 static void
 update_mlfs_priority (struct thread *t, void *aux UNUSED)
 {
-  fixed_point unbounded_priority;
+
+  if (t->recent_cpu_changed)
+    {
+      fixed_point unbounded_priority;
   
-  unbounded_priority = int_to_fp (PRI_MAX);
-  unbounded_priority = fp_sub (unbounded_priority,
-                               div_fp_by_int (t->recent_cpu_time, 4));
-  unbounded_priority = sub_int_from_fp (unbounded_priority, t->niceness * 2);
-  t->priority = bound (fp_to_int (unbounded_priority),
-                       PRI_MIN, PRI_MAX);
+      unbounded_priority = int_to_fp (PRI_MAX);
+      unbounded_priority = fp_sub (unbounded_priority,
+                                  div_fp_by_int (t->recent_cpu_time, 4));
+      unbounded_priority = sub_int_from_fp (unbounded_priority, t->niceness * 2);
+      t->priority = bound (fp_to_int (unbounded_priority),
+                          PRI_MIN, PRI_MAX);
+
+      t->recent_cpu_changed = false;
+    }
 }
 
 /* Returns value of X bounded by LOWER and UPPER. */
