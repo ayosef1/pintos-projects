@@ -40,9 +40,6 @@ static struct thread *idle_thread;
 /* Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
 
-/* Waking thread for waking up threads in */
-static struct thread *waking_thread;
-
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
@@ -94,7 +91,7 @@ static void update_all_recent_cpu_times (void);
 static void update_system_load_avg (void);
 static void update_all_priorities (void);
 static void update_recent_cpu_time (struct thread *t, void *aux UNUSED);
-static void update_mlfs_priority (struct thread *t, void *aux UNUSED);
+static void update_mlfqs_priority (struct thread *t, void *aux UNUSED);
 static int bound (int x, int lower, int upper);
 
 /* Initializes the threading system by transforming the code
@@ -436,7 +433,7 @@ thread_set_nice (int nice)
   old_level = intr_disable ();
   struct thread *cur = thread_current ();
   cur->niceness = bound(nice, NICE_MIN, NICE_MAX);
-  update_mlfs_priority (cur, NULL);
+  update_mlfqs_priority (cur, NULL);
 
   if (!list_empty (&ready_list)) 
   {
@@ -579,7 +576,7 @@ init_thread (struct thread *t, const char *name, int priority)
         t->niceness = thread_get_nice ();
         t->recent_cpu_time = int_to_fp (thread_current ()->recent_cpu_time);
       }
-    update_mlfs_priority (t, NULL);
+    update_mlfqs_priority (t, NULL);
   }
 
   /* Initialize the list of locks held by current list*/
@@ -815,7 +812,7 @@ update_all_recent_cpu_times (void)
 
 static void
 update_all_priorities (void) {
-  thread_foreach (update_mlfs_priority, NULL);
+  thread_foreach (update_mlfqs_priority, NULL);
 }
 
 /* Updates system load average according to this formula: 
@@ -851,7 +848,7 @@ update_recent_cpu_time (struct thread *t, void *aux UNUSED)
 /* Updates a thead's priority according to this formula:
    priority = PRI_MAX - (recent_cpu / 4) - (nice * 2) */
 static void
-update_mlfs_priority (struct thread *t, void *aux UNUSED)
+update_mlfqs_priority (struct thread *t, void *aux UNUSED)
 {
 
   if (t->recent_cpu_changed)
