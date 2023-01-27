@@ -122,8 +122,10 @@ sema_up (struct semaphore *sema)
 
   if (!list_empty (&sema->waiters)) 
   {
-    struct thread *highest_priority_waiter = list_entry (list_max (&sema->waiters, 
-              thread_compare_priority, NULL), struct thread, elem);
+    struct thread *highest_priority_waiter =
+                    list_entry (list_max (&sema->waiters,
+                          thread_compare_priority, NULL), struct thread, elem);
+
     list_remove (&highest_priority_waiter->elem);
     thread_unblock (highest_priority_waiter);
     
