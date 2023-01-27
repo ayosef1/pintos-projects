@@ -139,7 +139,7 @@ freeing the space allocated for a wake semaphore.
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-New members added to `struct thread`                  
+New members added to `struct thread`:                  
     int original_priority;       /* User set thread priority. */     
     struct list locks_held;      /* List of locks held by this thread. */
     struct lock *waiting_lock;   /* Lock thread is waiting for (if any)*/
@@ -335,6 +335,10 @@ ready threads.
     /* The number of threads in the ready_list */
     static int num_ready;
 
+New members added to `struct thread`:
+
+      fixed_point recent_cpu_time;        /* Exponentially weighted moving 
+                                           average of recent CPU time. */
 
 
 ---- ALGORITHMS ----
@@ -347,23 +351,33 @@ ready threads.
 timer  recent_cpu    priority   thread
 ticks   A   B   C   A   B   C   to run
 -----  --  --  --  --  --  --   ------
- 0
- 4
- 8
-12
-16
-20
-24
-28
-32
-36
+ 0      0   0   0  63  61  59        A
+ 4      4   0   0  62  61  59        A
+ 8      8   0   0  61  61  59        B
+12      8   4   0  61  60  59        A        
+16     12   4   0  60  60  59        B
+20     12   8   0  60  59  59        A
+24     16   8   0  59  59  59        C
+28     16   8   4  59  59  58        B
+32     16  12   4  59  58  58        A
+36     20  12   4  57  58  58        C
 
 >> C3: Did any ambiguities in the scheduler specification make values
 >> in the table uncertain?  If so, what rule did you use to resolve
 >> them?  Does this match the behavior of your scheduler?
 
+The ambiguity was whether recent_cpu should be incremented before or
+after the priority calculation when `timer_ticks() % TIME_SLICE`.
+Similarly, whether the priority should be calculated before or after
+a thread yields. In this case we decided to increment the recent_cpu
+prior to recalculating priority on ticks where the two coincided.
+
 >> C4: How is the way you divided the cost of scheduling between code
 >> inside and outside interrupt context likely to affect performance?
+
+In our implementation all of the scheduling occurs inside an interrupt
+context. We maintain a single queue instead of a different queue for
+each priority. Functionally this behaves the same way as it 
 
 ---- RATIONALE ----
 
@@ -372,12 +386,48 @@ ticks   A   B   C   A   B   C   to run
 >> time to work on this part of the project, how might you choose to
 >> refine or improve your design?
 
+In our implementation all of the scheduling occurs inside an interrupt
+context. We maintain a single queue instead of a different queue for
+each priority. Functionally this behaves the same way as the list_max
+function's selection criteria is priority and then proximity to the
+head as a tie breaker. Since adding to the queue is done using push back
+this means that round robin ordering is respected for threads with the
+same priority.
+
+The advantage of this design is once again in its simplicity. Maintaining
+more than one queue means that threads will often be switching queues,
+an operation that is expensive. In our case, we simply need to push update
+thread priorities correctly and push threads to the back of the queue once
+their tiem slice is done and the list_max function will abstract the
+remaining scheduling functionality.
+
+The disadvantage is in its inefficiency.
+
 >> C6: The assignment explains arithmetic for fixed-point math in
 >> detail, but it leaves it open to you to implement it.  Why did you
 >> decide to implement it the way you did?  If you created an
 >> abstraction layer for fixed-point math, that is, an abstract data
 >> type and/or a set of functions or macros to manipulate fixed-point
 >> numbers, why did you do so?  If not, why not?
+
+Fundamentally, we made abstractions to make the code a lot more readable
+both for us as we were developing, but also for those reading and developing
+the code in the future.
+
+The first abstraction we made was to create a new typedef of fixed_point.
+While just an int32_t under the hood, this allowed good code readability
+to know when a value is being interpreted as an integer of fixed point.
+
+Simiarly we developed a number of functions that specified the types of
+each operand and the operation (by function name and parameter types) as
+well as the return type (by the return type). This abstracted away the
+difficulty of having to do each of the complicated conversions and
+fixed point operations each time and clear what each line of code was doing.
+
+Finally, we the macro F as it is a value used repeatedly in fixed point
+calculations. Q and P provide another layer of abstraction (even though P)
+is not used strictly, to allow those reading the code to understand where
+the fixed point representation choice. 
 
                SURVEY QUESTIONS
                ================
