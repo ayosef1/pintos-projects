@@ -77,6 +77,7 @@ static void kernel_thread (thread_func *, void *aux);
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
+static struct thread *highest_priority_ready (void);
 static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
 static void *alloc_frame (struct thread *, size_t size);
@@ -409,11 +410,9 @@ thread_set_priority (int new_priority)
 
   if (!list_empty (&ready_list)) 
   {
-    struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
-              thread_compare_priority, NULL), struct thread, elem);
     
-    if (highest_priority_ready->priority > cur->priority)
-      thread_yield();
+    if (highest_priority_ready ()->priority > cur->priority)
+      thread_yield ();
   }
   intr_set_level (old_level);
 }
@@ -437,9 +436,7 @@ thread_set_nice (int nice)
 
   if (!list_empty (&ready_list)) 
   {
-    struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
-              thread_compare_priority, NULL), struct thread, elem);
-    if (highest_priority_ready->priority > cur->priority)
+    if (highest_priority_ready ()->priority > cur->priority)
       thread_yield();
   }
   intr_set_level (old_level);
@@ -612,12 +609,21 @@ next_thread_to_run (void)
     return idle_thread;
   else
   {
-    struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
-              thread_compare_priority, NULL), struct thread, elem);
-    list_remove (&highest_priority_ready->elem);
+    struct thread *highest_pri_ready = highest_priority_ready ();
+    list_remove (&highest_pri_ready->elem);
     num_ready--;
-    return highest_priority_ready;
+    return highest_pri_ready;
   } 
+}
+
+/* Returns the highest priority thread in the ready list */
+static struct thread *
+highest_priority_ready (void)
+{
+  ASSERT ( intr_get_level () == INTR_OFF);
+
+  return list_entry (list_max (&ready_list, 
+              thread_compare_priority, NULL), struct thread, elem);
 }
 
 /* Completes a thread switch by activating the new thread's page
