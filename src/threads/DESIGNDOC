@@ -139,6 +139,10 @@ freeing the space allocated for a wake semaphore.
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+New member added to `struct lock`:
+    struct list_elem locks_held_elem; /* List element for the per thread
+                                         locks_held by thread */
+
 New members added to `struct thread`:                  
     int original_priority;       /* User set thread priority. */     
     struct list locks_held;      /* List of locks held by this thread. */
@@ -166,7 +170,7 @@ to acquire a lock, it will updated its `waiting_lock` and then recursively
 donate by using the `waiting_lock` to access a lock and the holder member
 of the lock to access next nested thread. It then updates the `priority`
 if the donated is larger. When successfully acquiring a lock, the lock is
-pushed to the `locks_held` list. Priority isn’t changed because the highest
+added to the `locks_held` list. Priority isn’t changed because the highest
 priority runnable thread is always scheduled and when a lock is released
 the highest priority waiting thread is evicted from the waiters list.
 
@@ -179,37 +183,47 @@ its `locks_held` list and investigating each of that locks waiting list.
 >> B3: How do you ensure that the highest priority thread waiting for
 >> a lock, semaphore, or condition variable wakes up first?
 
-All of these synchronisation primitives are semaphores under the hood.
-When a call to `sema_up` is made, the thread whose priority is largest 
+When a synchronization primitive is signaled to wake up a thread, it will
+find the waiting thread with the highest priority and evict that thread.
+
+Specifically, for a semaphore the thread whose priority is largest 
 in the semaphore will be evicted from the `waiters` list. This is done
 by using the `list_max` function and passing in a comparison function
-that compares the priorities of threads.
+that compares the priorities of threads. Note that doing ordered insertion
+will not work because priorities can change while threads are in the wait list.
+A lock is just a semaphore under the hood, making a call to `sema_up` to wake
+up the next thread and so uses the same mechanism.
+
+For a condition variable, we take a similar approach by using the `list_max`
+function and custom comparison function to find the highest priority thread in
+its `waiters` list and waking that element.
 
 >> B4: Describe the sequence of events when a call to lock_acquire()
 >> causes a priority donation.  How is nested donation handled?
 
-In lock acquire, the thread makes a call to `sema_try_down`. If this call
-is unsuccessful, then the thread performs a recursive priority donation
-starting on the thread that currently holds the lock the current thread
-is trying to acquire. This is done by looking at the holder of a lock and
-donating the current thread’s `priority` if the current thread’s priority
-is greater. Recursion occurs when a lock holder is also waiting for a lock
-(indicated by the `waiting_lock` member of the thread). Nested donation
-is limited donating down 8 levels.
+In lock acquire, the thread attempts to decrement the semaphore but doesn't
+block on failure. If this call is unsuccessful, then the thread performs a
+recursive priority donation starting on the thread that currently holds the
+lock the current thread is trying to acquire. This is done by looking at the
+holder of a lock and donating the current thread’s `priority` if the current
+thread’s priority is greater. Recursion occurs when a lock holder is also 
+waiting for a lock (indicated by the `waiting_lock` member of the thread).
+Nested donation is limited to donating down 8 levels.
 
 >> B5: Describe the sequence of events when lock_release() is called
 >> on a lock that a higher-priority thread is waiting for.
 
 When the lock is released, the lock is removed from the running thread’s
-`locks_held` list. The running thread then recalculates its`priority` 
+list of locks held. The running thread then recalculates its priority
 by looking at all the locks it holds and taking the maximum
-priority from all threads in the `waiters` list for those held locks. 
-Finally `sema_up` is called in which the the thread with the highest
-priority is removed from the `waiters` list and added to the `ready_list`
-with a call to `thread_unblock`. If the removed highest priority thread
-has a higher priority than the running thread’s new priority, then the
-current running thread calls `thread_yield` (or `intr_yield_on_return`
-is set if in an interrupt context), to enable the newly evicted, higher
+priority from all threads directly waiting for those specific locks and its
+user set priority.
+ 
+Finally  the thread with the highest priority is removed from the the lock's
+semaphore's list of waiting threds and added to the of the ready queue.
+If the removed highest priority thread has a higher priority than the running
+thread’s new priority, then the current running thread will yield or if in an
+interrupt context, will yield on return, to enable the newly evicted, higher
 priority thread to run.
 
 ---- SYNCHRONIZATION ----
@@ -239,10 +253,10 @@ thread_1 because thread_1 holds a lock. If the context switched back to
 thread_1 before thread_2 had released the lock for thread_1’s priority,
 there would be deadlock.
 
-Another data race is in accessing the `ready_list` to check whether the
+Another data race is in accessing the ready queue to check whether the
 thread should yield. This also requires disabling interrupts for
 synchronisation as threads add and remove each other to this list
-e.g. in `thread_unblock` or `thread_yield`.
+when interrupts are disabled such as in `thread_unblock` calls.
 
 
 ---- RATIONALE ----
@@ -339,6 +353,7 @@ New members added to `struct thread`:
 
       fixed_point recent_cpu_time;        /* Exponentially weighted moving 
                                            average of recent CPU time. */
+                                      
 
 
 ---- ALGORITHMS ----
@@ -366,18 +381,20 @@ ticks   A   B   C   A   B   C   to run
 >> in the table uncertain?  If so, what rule did you use to resolve
 >> them?  Does this match the behavior of your scheduler?
 
-The ambiguity was whether recent_cpu should be incremented before or
-after the priority calculation when `timer_ticks() % TIME_SLICE`.
-Similarly, whether the priority should be calculated before or after
-a thread yields. In this case we decided to increment the recent_cpu
-prior to recalculating priority on ticks where the two coincided.
+The ambiguity was whether `recent_cpu_time` should be change before or
+after the priority changed on ticks where both ought should be change
+(i.e. every 4 ticks). Similarly, whether the priority should be calculated
+before or after a thread yields. In this case we decided to change the
+`recent_cpu_time` prior to changing priority on ticks where the two coincided.
 
 >> C4: How is the way you divided the cost of scheduling between code
 >> inside and outside interrupt context likely to affect performance?
 
 In our implementation all of the scheduling occurs inside an interrupt
 context. We maintain a single queue instead of a different queue for
-each priority. Functionally this behaves the same way as it 
+each priority. Functionally this behaves the same way as it.
+
+// Heavy calculations are gonna harm performance. 
 
 ---- RATIONALE ----
 
@@ -395,13 +412,13 @@ this means that round robin ordering is respected for threads with the
 same priority.
 
 The advantage of this design is once again in its simplicity. Maintaining
-more than one queue means that threads will often be switching queues,
+more than one queue means that threads will be changing 
 an operation that is expensive. In our case, we simply need to push update
 thread priorities correctly and push threads to the back of the queue once
 their tiem slice is done and the list_max function will abstract the
 remaining scheduling functionality.
 
-The disadvantage is in its inefficiency.
+The disadvantage is in its inefficiency. Having a single queue means that 
 
 >> C6: The assignment explains arithmetic for fixed-point math in
 >> detail, but it leaves it open to you to implement it.  Why did you
