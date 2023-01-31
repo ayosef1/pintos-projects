@@ -67,6 +67,8 @@ bool thread_mlfqs;
 
 /* Estimate of average number of threads ready to run over the past minute. */
 static fixed_point load_avg;
+
+/* The number of threads in the ready_list */
 static int num_ready;
 
 
@@ -75,6 +77,7 @@ static void kernel_thread (thread_func *, void *aux);
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
+static struct thread *highest_priority_ready (void);
 static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
 static void *alloc_frame (struct thread *, size_t size);
@@ -89,7 +92,7 @@ static void update_all_recent_cpu_times (void);
 static void update_system_load_avg (void);
 static void update_all_priorities (void);
 static void update_recent_cpu_time (struct thread *t, void *aux UNUSED);
-static void update_mlfs_priority (struct thread *t, void *aux UNUSED);
+static void update_mlfqs_priority (struct thread *t, void *aux UNUSED);
 static int bound (int x, int lower, int upper);
 
 /* Initializes the threading system by transforming the code
@@ -168,6 +171,7 @@ thread_tick (void)
         the running thread only, unless the idle thread is running. */
       if (t != idle_thread) 
         {
+          t->recent_cpu_changed = true;
           t->recent_cpu_time = add_int_to_fp (t->recent_cpu_time, 1);
         }
       /* Update system load average and recalculate
@@ -180,7 +184,6 @@ thread_tick (void)
       /* Update all priorities every fourth tick. */
       if (timer_ticks () % TIME_SLICE == 0) 
         update_all_priorities ();
-
     }
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -406,11 +409,9 @@ thread_set_priority (int new_priority)
 
   if (!list_empty (&ready_list)) 
   {
-    struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
-              thread_compare_priority, NULL), struct thread, elem);
     
-    if (highest_priority_ready->priority > cur->priority)
-      thread_yield();
+    if (highest_priority_ready ()->priority > cur->priority)
+      thread_yield ();
   }
   intr_set_level (old_level);
 }
@@ -419,7 +420,14 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+  enum intr_level old_level;
+  int priority;
+
+  old_level = intr_disable ();
+  priority = thread_current ()->priority;
+  intr_set_level (old_level);
+
+  return priority;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -430,13 +438,11 @@ thread_set_nice (int nice)
   old_level = intr_disable ();
   struct thread *cur = thread_current ();
   cur->niceness = bound(nice, NICE_MIN, NICE_MAX);
-  update_mlfs_priority (cur, NULL);
+  update_mlfqs_priority (cur, NULL);
 
   if (!list_empty (&ready_list)) 
   {
-    struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
-              thread_compare_priority, NULL), struct thread, elem);
-    if (highest_priority_ready->priority > cur->priority)
+    if (highest_priority_ready ()->priority > cur->priority)
       thread_yield();
   }
   intr_set_level (old_level);
@@ -446,7 +452,14 @@ thread_set_nice (int nice)
 int
 thread_get_nice (void) 
 {
-  return thread_current ()->niceness;
+  enum intr_level old_level;
+  int nice;
+
+  old_level = intr_disable ();
+  nice = thread_current ()->niceness;
+  intr_set_level (old_level);
+
+  return nice;
 }
 
 /* Returns 100 times the system load average,
@@ -454,7 +467,14 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void) 
 {
-  return fp_to_int (mult_fp_by_int (load_avg, 100));
+  enum intr_level old_level;
+  int scaled_load_avg;
+
+  old_level = intr_disable ();
+  scaled_load_avg = fp_to_int (mult_fp_by_int (load_avg, PRINT_FP_CONST));
+  intr_set_level (old_level);
+
+  return scaled_load_avg;
 }
 
 /* Returns 100 times the current thread's recent_cpu value,
@@ -462,8 +482,17 @@ thread_get_load_avg (void)
 int
 thread_get_recent_cpu (void) 
 {
+  enum intr_level old_level;
+  int scaled_recent_cpu_time;
+
+  old_level = intr_disable ();
   struct thread *cur = thread_current ();
-  return fp_to_int (mult_fp_by_int (cur->recent_cpu_time, 100));
+  scaled_recent_cpu_time = fp_to_int (mult_fp_by_int (cur->recent_cpu_time,
+                                                      PRINT_FP_CONST));
+  intr_set_level (old_level);
+  
+  return scaled_recent_cpu_time;
+
 }
 
 
@@ -555,6 +584,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->original_priority = priority;
   t->wake_time = 0;
+  t->recent_cpu_changed = true;
   t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
   t->waiting_lock = NULL;
@@ -566,13 +596,15 @@ init_thread (struct thread *t, const char *name, int priority)
       {
         t->niceness = NICE_INITIAL;
         t->recent_cpu_time = RECENT_CPU_TIME_INITIAL;
+        t->priority = PRI_DEFAULT;
+        t->recent_cpu_changed = false;
       }
     else 
       {
         t->niceness = thread_get_nice ();
         t->recent_cpu_time = int_to_fp (thread_current ()->recent_cpu_time);
+        update_mlfqs_priority(t, NULL);
       }
-    update_mlfs_priority (t, NULL);
   }
 
   /* Initialize the list of locks held by current list*/
@@ -608,12 +640,21 @@ next_thread_to_run (void)
     return idle_thread;
   else
   {
-    struct thread *highest_priority_ready = list_entry (list_max (&ready_list, 
-              thread_compare_priority, NULL), struct thread, elem);
-    list_remove (&highest_priority_ready->elem);
+    struct thread *highest_pri_ready = highest_priority_ready ();
+    list_remove (&highest_pri_ready->elem);
     num_ready--;
-    return highest_priority_ready;
+    return highest_pri_ready;
   } 
+}
+
+/* Returns the highest priority thread in the ready list */
+static struct thread *
+highest_priority_ready (void)
+{
+  ASSERT ( intr_get_level () == INTR_OFF);
+
+  return list_entry (list_max (&ready_list, 
+              thread_compare_priority, NULL), struct thread, elem);
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -726,8 +767,8 @@ thread_max_waiting_priority (struct thread * cur)
                           &lock_owned_by_current_thread->semaphore.waiters, 
                           thread_compare_priority, NULL), struct thread, elem);
           
-          new_priority = ((new_priority) > (highest_priority_waiter->priority) ? 
-                            (new_priority) : (highest_priority_waiter->priority));
+          new_priority = (new_priority) > (highest_priority_waiter->priority) ? 
+                          (new_priority) : (highest_priority_waiter->priority);
         }
     }
   return new_priority;
@@ -808,31 +849,29 @@ update_all_recent_cpu_times (void)
 
 static void
 update_all_priorities (void) {
-  thread_foreach (update_mlfs_priority, NULL);
+  thread_foreach (update_mlfqs_priority, NULL);
 }
 
-/* Recalculates system load average according to this formula: 
+/* Updates system load average according to this formula: 
    load_avg = (59/60)*load_avg + (1/60)*ready_threads. */
 static void
 update_system_load_avg (void)
 {
-  fixed_point coeff1;
-  fixed_point coeff2;
   int ready_threads = num_ready;
 
-  if (thread_current () != idle_thread) ready_threads++;
+  if (thread_current () != idle_thread) 
+    ready_threads++;
 
-  coeff1 = fp_div (int_to_fp (59), int_to_fp (60));
-  coeff2 = fp_div (int_to_fp (1), int_to_fp (60));
-  load_avg = fp_add (fp_mult (coeff1, load_avg),
-                     mult_fp_by_int (coeff2, ready_threads));
+  load_avg = fp_add (fp_mult (LOAD_WEIGHT, load_avg),
+                     mult_fp_by_int (READY_WEIGHT, ready_threads));
 }
 
-/* Calculates a thead's recent_cpu according to this formula:
+/* Updates a thead's recent_cpu according to this formula:
    (2*load_avg)/(2*load_avg + 1) * recent_cpu + nice */
 static void
 update_recent_cpu_time (struct thread *t, void *aux UNUSED)
 {
+  fixed_point new_time;
   fixed_point double_load_avg;
   fixed_point coeff;
   fixed_point scaled_recent_cpu;
@@ -840,22 +879,33 @@ update_recent_cpu_time (struct thread *t, void *aux UNUSED)
   double_load_avg = mult_fp_by_int(load_avg, 2);
   coeff = fp_div (double_load_avg, add_int_to_fp (double_load_avg, 1));
   scaled_recent_cpu = fp_mult (coeff, t->recent_cpu_time);
-  t->recent_cpu_time = add_int_to_fp (scaled_recent_cpu, t->niceness);
+  new_time = add_int_to_fp (scaled_recent_cpu, t->niceness);
+
+  /* Check if recent CPU time changed. */
+  t->recent_cpu_changed = t->recent_cpu_time != new_time;
+  t->recent_cpu_time = new_time;
 }
 
-/* Calculates a thead's priority according to this formula:
+/* Updates a thead's priority according to this formula:
    priority = PRI_MAX - (recent_cpu / 4) - (nice * 2) */
 static void
-update_mlfs_priority (struct thread *t, void *aux UNUSED)
+update_mlfqs_priority (struct thread *t, void *aux UNUSED)
 {
-  fixed_point unbounded_priority;
+
+  if (t != idle_thread && t->recent_cpu_changed)
+    {
+      fixed_point unbounded_priority;
   
-  unbounded_priority = int_to_fp (PRI_MAX);
-  unbounded_priority = fp_sub (unbounded_priority,
-                               div_fp_by_int (t->recent_cpu_time, 4));
-  unbounded_priority = sub_int_from_fp (unbounded_priority, t->niceness * 2);
-  t->priority = bound (fp_to_int (unbounded_priority),
-                       PRI_MIN, PRI_MAX);
+      unbounded_priority = int_to_fp (PRI_MAX);
+      unbounded_priority = fp_sub (unbounded_priority,
+                                  div_fp_by_int (t->recent_cpu_time, 4));
+      unbounded_priority = sub_int_from_fp (unbounded_priority, 
+                                            t->niceness * 2);
+      t->priority = bound (fp_to_int (unbounded_priority),
+                          PRI_MIN, PRI_MAX);
+
+      t->recent_cpu_changed = false;
+    }
 }
 
 /* Returns value of X bounded by LOWER and UPPER. */

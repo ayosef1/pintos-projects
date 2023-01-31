@@ -1,14 +1,23 @@
 #include <stdint.h>
 
 /* We use a signed 32-bit integer to create
-   a p.q fixed point number representation. */
+   a P.Q fixed point number representation. */
 typedef int32_t fixed_point;
 
 /* Default to using 17.14 representation. 
    Note: p + q must equal 31 */
-#define P 17
-#define Q 14
+#define P 17         /* The P value in P.Q reprentatoin */
+#define Q 14         /* The Q value in P.Q representation */
+
+/* Conversion constant fixed point and integers */
 #define F (1 << Q)
+
+/* Weight factors used in updating the load average */
+#define LOAD_WEIGHT (59 * F / 60)   /* Weight of load average term */
+#define READY_WEIGHT (1 * F / 60)   /* Weight of number ready threads term */
+
+/* Constant factor used to get fixed points as integers*/
+#define PRINT_FP_CONST 100
 
 fixed_point int_to_fp (int n);
 
