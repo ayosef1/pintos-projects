@@ -195,7 +195,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, const char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -302,7 +302,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, file_name))
     goto done;
 
   /* Start address. */
@@ -427,7 +427,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, const char *file_name) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -441,6 +441,59 @@ setup_stack (void **esp)
       else
         palloc_free_page (kpage);
     }
+
+  char *token, *save_ptr;
+  char *file_name_copy = palloc_get_page (0);
+  if (file_name_copy == NULL)
+    return false;
+
+  strlcpy (file_name_copy, file_name, PGSIZE);
+  char **argv;
+  int argc;
+  for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
+      token = strtok_r (NULL, " ", &save_ptr))
+  {
+
+    size_t length = strlen (token) + 1;
+    *esp -= length;
+    memcpy (*esp, token, length);
+    argv[argc] = *esp;
+    argc++;
+  }
+
+  size_t word = 4;
+
+  int padding = (size_t) *esp % word;
+  if (padding)
+  {
+    *esp -= padding;
+    memset (*esp, 0, padding);
+  }
+
+  /* Push Null Pointer Sentinel as required by C standard*/
+  *esp -= word;
+  uint32_t null = 0;
+  memcpy(*esp, &null, word);
+
+  /* Push arguments in reverse order*/
+  for (int i = argc - 1; i >= 0; i--) 
+  {
+    *esp -= word;
+    memcpy(*esp, &argv[i], 4);
+  }
+
+  /* Push address of argv*/
+  *esp -= word;
+  memcpy(*esp, &(*esp)+4, 4);
+
+  /* Push argc*/
+  *esp -= word;
+  memcpy(*esp, &argc, word);
+
+  /* Push fake pointer */
+  *esp -= word;
+  memcpy(*esp, &null, word);
+
   return success;
 }
 
