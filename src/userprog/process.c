@@ -38,8 +38,18 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  /* As to not interfere with the fn_copy and file_name used by thread create
+     and load */
+  char *command_name = palloc_get_page (0);
+  if (command_name == NULL)
+    return TID_ERROR;
+  strlcpy (command_name, fn_copy, PGSIZE);
+
+  char *token, *save_ptr;
+  token = strtok_r(command_name, " ", &save_ptr);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (token, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -222,10 +232,18 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  char *token, *save_ptr;
+  char *file_name_copy = palloc_get_page (0);
+  if (file_name_copy == NULL)
+    goto done;
+
+  strlcpy (file_name_copy, file_name, PGSIZE);
+  
+  token = strtok_r (file_name_copy, " ", &save_ptr);
+  file = filesys_open (token);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", token);
       goto done; 
     }
 
@@ -448,12 +466,16 @@ setup_stack (void **esp, const char *file_name)
     return false;
 
   strlcpy (file_name_copy, file_name, PGSIZE);
-  char **argv;
-  int argc;
+
+  char *array = palloc_get_page (0);
+  if (array == NULL)
+    return false;
+  char **argv = (char **) array;
+
+  int argc = 0;
   for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
       token = strtok_r (NULL, " ", &save_ptr))
   {
-
     size_t length = strlen (token) + 1;
     *esp -= length;
     memcpy (*esp, token, length);
@@ -472,27 +494,27 @@ setup_stack (void **esp, const char *file_name)
 
   /* Push Null Pointer Sentinel as required by C standard*/
   *esp -= word;
-  uint32_t null = 0;
-  memcpy(*esp, &null, word);
+  memset (*esp, 0, word);
 
   /* Push arguments in reverse order*/
   for (int i = argc - 1; i >= 0; i--) 
   {
     *esp -= word;
-    memcpy(*esp, &argv[i], 4);
+    memcpy (*esp, &argv[i], word);
   }
 
   /* Push address of argv*/
   *esp -= word;
-  memcpy(*esp, &(*esp)+4, 4);
+  memcpy (*esp, &(*esp)+word, word);
 
   /* Push argc*/
   *esp -= word;
-  memcpy(*esp, &argc, word);
+  memcpy (*esp, &argc, word);
 
   /* Push fake pointer */
   *esp -= word;
-  memcpy(*esp, &null, word);
+  uint32_t null = 0;
+  memcpy (*esp, &null, word);
 
   return success;
 }
