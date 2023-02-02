@@ -327,8 +327,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Set up stack. */
   if (!setup_stack (esp, file_name))
     goto done;
-  hex_dump(*esp, *esp, PHYS_BASE - *esp, true);
-
+  
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
@@ -457,7 +456,6 @@ setup_stack (void **esp, const char *file_name)
   bool success = false;
 
   // 64-bit so we don't assume word length
-  uint64_t start_height = (uint64_t) *esp;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
@@ -468,6 +466,9 @@ setup_stack (void **esp, const char *file_name)
       else
         palloc_free_page (kpage);
     }
+
+  // uint64_t to make sure works for all address lengths
+  uint64_t start_height = (uint64_t) *esp;
 
   char *token, *save_ptr;
   char *file_name_copy = palloc_get_page (0);
@@ -518,7 +519,7 @@ setup_stack (void **esp, const char *file_name)
   for (int i = argc - 1; i >= 0; i--) 
   {
     PUSH_STACK(esp);
-    memcpy (esp, &argv[i], WORD_SIZE);
+    memcpy (*esp, &argv[i], WORD_SIZE);
   }
 
   palloc_free_page (argv);
