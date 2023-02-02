@@ -38,8 +38,18 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  /* As to not interfere with the fn_copy and file_name used by thread create
+     and load */
+  char *command_name = palloc_get_page (0);
+  if (command_name == NULL)
+    return TID_ERROR;
+  strlcpy (command_name, fn_copy, PGSIZE);
+
+  char *token, *save_ptr;
+  token = strtok_r(command_name, " ", &save_ptr);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (token, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -225,10 +235,18 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  char *token, *save_ptr;
+  char *file_name_copy = palloc_get_page (0);
+  if (file_name_copy == NULL)
+    goto done;
+
+  strlcpy (file_name_copy, file_name, PGSIZE);
+  
+  token = strtok_r (file_name_copy, " ", &save_ptr);
+  file = filesys_open (token);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", token);
       goto done; 
     }
 
@@ -451,7 +469,11 @@ setup_stack (void **esp, const char *file_name)
     return false;
 
   strlcpy (file_name_copy, file_name, PGSIZE);
-  char **argv = palloc_get_page(0);
+
+  char **argv = palloc_get_page (0);
+  if (argv == NULL)
+    return false;
+
   int argc = 0;
   for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
       token = strtok_r (NULL, " ", &save_ptr))
@@ -474,30 +496,30 @@ setup_stack (void **esp, const char *file_name)
   }
 
   /* Push Null Pointer Sentinel as required by C standard*/
-  *esp -= PINTOS_WORD;
-  memset(*esp, 0, PINTOS_WORD);
+  *esp -= word;
+  uint32_t null = 0;
+  memcpy(*esp, &null, word);
 
   /* Push arguments in reverse order*/
   for (int i = argc - 1; i >= 0; i--) 
   {
-    PUSH_STACK(esp);
-    memcpy (esp, &argv[i], PINTOS_WORD);
+    *esp -= word;
+    memcpy(*esp, &argv[i], 4);
   }
 
   palloc_free_page (argv);
 
   /* Push address of argv*/
-  PUSH_STACK(esp);
-  void * first_arg_addr = (*esp) + PINTOS_WORD;
-  memcpy (*esp, &first_arg_addr, PINTOS_WORD);
+  *esp -= word;
+  memcpy(*esp, &(*esp)+4, 4);
 
   /* Push argc*/
-  PUSH_STACK(esp);
-  memcpy(*esp, &argc, PINTOS_WORD);
+  *esp -= word;
+  memcpy(*esp, &argc, word);
 
   /* Push fake pointer */
-  *esp -= PINTOS_WORD;
-  memset(*esp, 0, PINTOS_WORD);
+  *esp -= word;
+  memcpy(*esp, &null, word);
 
   return success;
 }
