@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "devices/timer.h"
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -98,6 +99,7 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  timer_sleep(1000);
   return -1;
 }
 
@@ -322,6 +324,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Set up stack. */
   if (!setup_stack (esp, file_name))
     goto done;
+  hex_dump(*esp, *esp, PHYS_BASE - *esp, true);
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
