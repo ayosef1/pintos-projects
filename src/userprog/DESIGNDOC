@@ -70,9 +70,40 @@ than the number of pages then we return false.
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
 
+The difference betwen strtok and strtok_r () is how the remaining string is
+stored. strtok () reads up to the first instance of a delimiter and stores
+the remainder of the string in a static buffer. strtok_r() on the other hand
+requires you to provide a SAVE_PTR which is set to point at remaining part of
+the string after the next delimiter.
+
+The reason that Pintos implements strtok_r() is because it provides the same
+functionality as strtok () but has thread safety. If multiple threads are using
+strtok, there is a data race on the static buffer, as all the threads use
+this to reference the remainder of the string that hasn't been parsed.
+
+
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
+
+The first advantage is security. String operations are famously unsafe and
+can cause undefined behaviour. Performing the string operations involved in
+command tokenization to an application (the shell) rather than in the kernel
+mitigates and isolates the damage from any vulnerabilities in tokenization as
+well as protecting the critical infrastructure that is the kernel.
+
+The second advantage is a better abstraction of the kernel. The kernel is a
+low level interface with the hardware that abstracts the difficulty of doing
+so away from the applications. The shell on the other hand is an application,
+one layer of abstraction above the kernel. The tokenization of a command, which
+is directly passed to the shell therefore is much more alligned with the layer
+of abstraction that the shell provides. Once a verified command has been parsed
+then it makes sense to pass to the kernel to execute the command.
+
+A third advantage is that it allows for the simplification of the kernel.
+Having the shell parse the command allows the shell to perform the first
+steps for functionalities such as redirection and pipelining (applications
+that use system calls, rather than base kernel functionalities).
 
                  SYSTEM CALLS
                  ============
