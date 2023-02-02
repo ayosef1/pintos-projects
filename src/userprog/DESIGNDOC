@@ -30,11 +30,41 @@ Gordon Martinez-Piedra <martigp@stanford.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+/* Size of word used frequently when pushing to stack*/
+#define WORD_SIZE sizeof (void *)
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe how you implemented argument parsing.  How do
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
+
+The only difference from argument passing style of 80x86 described in
+Section 3.5 of the Pintos reference is that we order the tokenized
+literals in the opposite direction. This means we push words of
+the command in left to right order (whereas 3.5 does it in right to left).
+
+We implement this by tokenizing and pushing each word of the command onto
+the stack, each time incrementing our argument counter. In order to tokenize
+we first allocate a page to have an copyable version of the command string.
+Similarly, we allocate a page to store the addresses of each word of the 
+command pushed to the stack. The order of the addresses in this page are the
+same as the order that they are pushed.
+
+Next, we add the padding by looking at the current stack addres and rounding
+down to the nearest word size (4 for our 32-bit x86 simulators). We then copy
+each of the addresses of the arguments from the page we allocated onto the
+stack. To do this in the correct order, we start from the last address we
+added to the page of addresses, and iterate backwards (using the stored number
+of arguments to do so). 
+
+Finally we push argv, argc and the null return address.
+
+Since we know that the command line length is not greater than a page itself,
+once we have pushed all the arguments to the page, we then know how much more
+space will have to be allocated (4 bytes for each argument, 12 bytes for return
+argv, argcc and then however many padding bytes). If total bytes is greater
+than the number of pages then we return false.
 
 ---- RATIONALE ----
 

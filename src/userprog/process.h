@@ -3,7 +3,7 @@
 
 #include "threads/thread.h"
 
-#define PINTOS_WORD 4
+#define WORD_SIZE sizeof (void *)
 
 tid_t process_execute (const char *file_name);
 int process_wait (tid_t);

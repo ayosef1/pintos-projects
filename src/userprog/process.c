@@ -206,7 +206,7 @@ struct Elf32_Phdr
 #define PF_R 4          /* Readable. */
 
 /* Pushes a word at SRC to the minimal stack pointed to by *ESP */
-#define PUSH_STACK(ESP) *ESP -= PINTOS_WORD
+#define PUSH_STACK(ESP) *ESP -= WORD_SIZE
 
 static bool setup_stack (void **esp, const char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
@@ -453,6 +453,9 @@ setup_stack (void **esp, const char *file_name)
   uint8_t *kpage;
   bool success = false;
 
+  // 64-bit so we don't assume word length
+  uint64_t start_height = (uint64_t) *esp;
+
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
@@ -487,8 +490,17 @@ setup_stack (void **esp, const char *file_name)
 
   palloc_free_page(file_name_copy);
 
+  int padding = (size_t) *esp % WORD_SIZE;
 
-  int padding = (size_t) *esp % PINTOS_WORD;
+    // Calculate if will overflow 1 page
+    // Magic 12 is bytes needed for argc, argv and ret address
+    // 3 * WORD_SIZE
+  uint64_t stack_bytes_needed = (start_height - (uint64_t) *esp) +
+                                (WORD_SIZE * argc) + 12 + padding;
+  
+  if (stack_bytes_needed > PGSIZE)
+    return false;
+
   if (padding)
   {
     *esp -= padding;
@@ -496,14 +508,14 @@ setup_stack (void **esp, const char *file_name)
   }
 
   /* Push Null Pointer Sentinel as required by C standard*/
-  *esp -= PINTOS_WORD;
-  memset(*esp, 0, PINTOS_WORD);
+  *esp -= WORD_SIZE;
+  memset(*esp, 0, WORD_SIZE);
 
   /* Push arguments in reverse order*/
   for (int i = argc - 1; i >= 0; i--) 
   {
     PUSH_STACK(esp);
-    memcpy (esp, &argv[i], PINTOS_WORD);
+    memcpy (esp, &argv[i], WORD_SIZE);
   }
 
   palloc_free_page (argv);
@@ -511,15 +523,15 @@ setup_stack (void **esp, const char *file_name)
   /* Push address of argv*/
   void * first_arg_addr = *esp;
   PUSH_STACK(esp);
-  memcpy (*esp, &first_arg_addr, PINTOS_WORD);
+  memcpy (*esp, &first_arg_addr, WORD_SIZE);
 
   /* Push argc*/
   PUSH_STACK(esp);
-  memcpy(*esp, &argc, PINTOS_WORD);
+  memcpy(*esp, &argc, WORD_SIZE);
 
   /* Push fake pointer */
-  *esp -= PINTOS_WORD;
-  memset(*esp, 0, PINTOS_WORD);
+  *esp -= WORD_SIZE;
+  memset(*esp, 0, WORD_SIZE);
 
   return success;
 }
