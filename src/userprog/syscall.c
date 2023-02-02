@@ -7,9 +7,8 @@
 #include "userprog/pagedir.h"
 
 static void syscall_handler (struct intr_frame *);
-static bool is_valid_pointer (const void *uaddr);
 
-static void sys_halt (uint32_t *esp);
+static void sys_halt (void);
 static void sys_exit (uint32_t *esp);
 static pid_t sys_exec (uint32_t *esp);
 static int sys_wait (uint32_t *esp);
@@ -22,6 +21,14 @@ static int sys_write (uint32_t *esp);
 static void sys_seek (uint32_t *esp);
 static unsigned sys_tell (uint32_t *esp);
 static void sys_close (uint32_t *esp);
+
+static void exit (int status);
+
+static void *get_buffer_arg (uint32_t *esp, int pos, int size);
+static int get_int_arg (uint32_t *esp, int pos);
+static int get_unsigned_arg (uint32_t *esp, int pos);
+static bool is_valid_pointer (const void *uaddr);
+static bool is_valid_buffer (void *buffer, unsigned size);
 
 void
 syscall_init (void) 
@@ -39,17 +46,14 @@ syscall_handler (struct intr_frame *f UNUSED)
   argv0 = f->esp;
 
   if (!is_valid_pointer (argv0))
-  {
-    /* user program tried to give us an invalid pointer. */
-    /* exit and clean up*/
-  }
+    exit(-1);
 
   syscall_num = *argv0;
   switch (syscall_num)
   {
     case SYS_HALT:                   /* Halt the operating system. */
       printf ("%s", "halt");
-      sys_halt (f->esp);
+      sys_halt ();
       break;
     case SYS_EXIT:                   /* Terminate this process. */
       printf("%s", "exit");
@@ -100,222 +104,115 @@ syscall_handler (struct intr_frame *f UNUSED)
       sys_close (f->esp);
       break;
   }
-  // printf ("system call!\n");
-  // thread_exit ();
 }
 
 void
-sys_halt (uint32_t *esp)
+exit (int status)
 {
-  /* 0 arguments */
-  /* actually perform the sys call */
+  struct thread *cur;
+
+  cur = thread_current ();
+  printf ("%s: exit(%d)\n", cur->name, status);
+  thread_exit ();
 }
 
 void
-sys_exit (uint32_t *esp)
+sys_halt ()
 {
-  /* 1 argument */
-  uint32_t *status;
 
-  status = esp + 1;
-  if (!is_valid_pointer (status))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+}
+
+void
+sys_exit (uint32_t *esp UNUSED)
+{
+  int status;
+
+  status = get_int_arg (esp, 1);
+  exit(status);
 }
 
 pid_t
-sys_exec (uint32_t *esp)
+sys_exec (uint32_t *esp UNUSED)
 {
-  /* 1 argument*/
-  uint32_t *cmd_line;
-  /* be very careful. cmd_line is supposed to be an array*/
-
-  cmd_line = esp + 1;
-
-  if (!is_valid_pointer (cmd_line))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  return 0;
 }
 
 int
-sys_wait (uint32_t *esp)
+sys_wait (uint32_t *esp UNUSED)
 {
-  /* 1 argument*/
-  uint32_t *pid;
-
-  pid = esp + 1;
-
-  if (!is_valid_pointer (pid))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  return 0;
 }
 
 bool
-sys_create (uint32_t *esp)
+sys_create (uint32_t *esp UNUSED)
 {
-  /* 2 argument */
-  uint32_t *file;
-  /* be very careful. file is an array of chars */
-  uint32_t *initial_size;
-
-  file = esp + 1;
-  initial_size = esp + 2;
-
-  if (!is_valid_pointer (file) || !is_valid_pointer (initial_size))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  return false;
 }
 
 bool
-sys_remove (uint32_t *esp)
+sys_remove (uint32_t *esp UNUSED)
 {
-  /* 1 argument */
-  uint32_t *file;
-  /* be very careful. file is an array of chars */
-
-  file = esp + 1;
-
-  if (!is_valid_pointer (file))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  return false;
 }
 
 int
-sys_open (uint32_t *esp)
+sys_open (uint32_t *esp UNUSED)
 {
-  /* 1 argument */
-  uint32_t *file;
-  /* be very careful. file is an array of chars */
-
-  file = esp + 1;
-
-  if (!is_valid_pointer (file))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  return 0;
 }
 
 int
-sys_filesize (uint32_t *esp)
+sys_filesize (uint32_t *esp UNUSED)
 {
-  uint32_t *fd;
-
-  fd = esp + 1;
-
-  if (!is_valid_pointer (fd))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  return 0;
 }
 
 int
-sys_read (uint32_t *esp)
+sys_read (uint32_t *esp UNUSED)
 {
-  uint32_t *fd;
-  uint32_t *buffer;
-  uint32_t *size;
-
-  fd = esp + 1;
-  buffer = esp + 2;
-  size = esp + 3;
-
-  if (!is_valid_pointer (fd) 
-      || !is_valid_pointer (buffer)
-      || !is_valid_pointer (size) )
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  return 0;
 }
 
 int
 sys_write (uint32_t *esp)
 {
-  uint32_t *fd;
-  uint32_t *buffer;
-  uint32_t *size;
+  int fd;
+  const void *buffer;
+  unsigned size;
 
-  fd = esp + 1;
-  buffer = esp + 2;
-  size = esp + 3;
+  fd = get_int_arg (esp, 1);
+  size = get_unsigned_arg (esp, 3);
+  buffer = get_buffer_arg (esp, 2, size);
 
-  if (!is_valid_pointer (fd) 
-      || !is_valid_pointer (buffer)
-      || !is_valid_pointer (size) )
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  /* only handle writing to console for now */
+  if (fd == STDOUT_FILENO)
+    {
+      int remaining = size;
+      while (remaining > 0)
+        {
+          putbuf (buffer, size);
+          remaining -= 512;
+        }
+      return size;
+    }
+  return 0;
 }
-
 void
-sys_seek (uint32_t *esp)
+sys_seek (uint32_t *esp UNUSED)
 {
-  uint32_t *fd;
-  uint32_t *position;
 
-  fd = esp + 1;
-  position = esp + 2;
-
-  if (!is_valid_pointer (fd) || !is_valid_pointer (position))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
 }
 
 unsigned
-sys_tell (uint32_t *esp)
+sys_tell (uint32_t *esp UNUSED)
 {
-  /* 1 argument */
-  uint32_t *fd;
-
-  fd = esp + 1;
-
-  if (!is_valid_pointer (fd))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
+  return 1;
 }
 
 void
-sys_close (uint32_t *esp)
+sys_close (uint32_t *esp UNUSED)
 {
-  /* 1 argument */
-  uint32_t *fd;
 
-  fd = esp + 1;
-
-  if (!is_valid_pointer (fd))
-  {
-    /* invalid pointers*/
-    /* clean up and exit*/
-  }
-  /* actually perform the sys call */
 }
 
 /* The kernel must be very careful about doing so, because the user can pass a 
@@ -330,3 +227,56 @@ is_valid_pointer (const void *vaddr)
     return false;
   return pagedir_get_page (thread_current ()->pagedir, vaddr) != NULL;
 }
+
+bool 
+is_valid_buffer (void *buffer, unsigned size)
+{
+  /* depending on operation, might need to double check permissions. */
+  uint8_t *cur;
+  uint8_t *end;
+  
+  end = (uint8_t *)buffer + size;
+  for (cur = buffer; cur < end; cur++)
+  {
+    if (!is_valid_pointer (cur))
+      return false;
+  }
+  return true;
+}
+
+void *
+get_buffer_arg (uint32_t *esp, int pos, int size)
+{
+  uint32_t *arg;
+
+  arg = esp + pos;
+  if (!is_valid_pointer (arg))
+    exit (-1);
+  if (!is_valid_buffer (*(void **)arg, size))
+    exit (-1);
+  return *(void **)arg;
+}
+
+
+int
+get_int_arg (uint32_t *esp, int pos)
+{
+  uint32_t *arg;
+
+  arg = esp + pos;
+  if (is_valid_buffer (arg, sizeof(int)))
+    exit (-1);
+  return *(int *)arg;
+}
+
+int
+get_unsigned_arg (uint32_t *esp, int pos)
+{
+  uint32_t *arg;
+
+  arg = esp + pos;
+  if (is_valid_buffer (arg, sizeof(unsigned)))
+    exit (-1);
+  return *(unsigned *)arg;
+}
+
