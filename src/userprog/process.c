@@ -496,30 +496,30 @@ setup_stack (void **esp, const char *file_name)
   }
 
   /* Push Null Pointer Sentinel as required by C standard*/
-  *esp -= word;
-  uint32_t null = 0;
-  memcpy(*esp, &null, word);
+  *esp -= PINTOS_WORD;
+  memset(*esp, 0, PINTOS_WORD);
 
   /* Push arguments in reverse order*/
   for (int i = argc - 1; i >= 0; i--) 
   {
-    *esp -= word;
-    memcpy(*esp, &argv[i], 4);
+    PUSH_STACK(esp);
+    memcpy (esp, &argv[i], PINTOS_WORD);
   }
 
   palloc_free_page (argv);
 
   /* Push address of argv*/
-  *esp -= word;
-  memcpy(*esp, &(*esp)+4, 4);
+  void * first_arg_addr = *esp;
+  PUSH_STACK(esp);
+  memcpy (*esp, &first_arg_addr, PINTOS_WORD);
 
   /* Push argc*/
-  *esp -= word;
-  memcpy(*esp, &argc, word);
+  PUSH_STACK(esp);
+  memcpy(*esp, &argc, PINTOS_WORD);
 
   /* Push fake pointer */
-  *esp -= word;
-  memcpy(*esp, &null, word);
+  *esp -= PINTOS_WORD;
+  memset(*esp, 0, PINTOS_WORD);
 
   return success;
 }
