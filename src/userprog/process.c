@@ -195,6 +195,9 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
+/* Pushes a word at SRC to the minimal stack pointed to by *ESP */
+#define PUSH_STACK(ESP) *ESP -= PINTOS_WORD
+
 static bool setup_stack (void **esp, const char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
@@ -448,22 +451,22 @@ setup_stack (void **esp, const char *file_name)
     return false;
 
   strlcpy (file_name_copy, file_name, PGSIZE);
-  char **argv;
-  int argc;
+  char **argv = palloc_get_page(0);
+  int argc = 0;
   for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
       token = strtok_r (NULL, " ", &save_ptr))
   {
-
     size_t length = strlen (token) + 1;
     *esp -= length;
-    memcpy (*esp, token, length);
+    strlcpy (*esp, token, length);
     argv[argc] = *esp;
     argc++;
   }
 
-  size_t word = 4;
+  palloc_free_page(file_name_copy);
 
-  int padding = (size_t) *esp % word;
+
+  int padding = (size_t) *esp % PINTOS_WORD;
   if (padding)
   {
     *esp -= padding;
@@ -471,28 +474,30 @@ setup_stack (void **esp, const char *file_name)
   }
 
   /* Push Null Pointer Sentinel as required by C standard*/
-  *esp -= word;
-  uint32_t null = 0;
-  memcpy(*esp, &null, word);
+  *esp -= PINTOS_WORD;
+  memset(*esp, 0, PINTOS_WORD);
 
   /* Push arguments in reverse order*/
   for (int i = argc - 1; i >= 0; i--) 
   {
-    *esp -= word;
-    memcpy(*esp, &argv[i], 4);
+    PUSH_STACK(esp);
+    memcpy (esp, &argv[i], PINTOS_WORD);
   }
 
+  palloc_free_page (argv);
+
   /* Push address of argv*/
-  *esp -= word;
-  memcpy(*esp, &(*esp)+4, 4);
+  PUSH_STACK(esp);
+  void * first_arg_addr = (*esp) + PINTOS_WORD;
+  memcpy (*esp, &first_arg_addr, PINTOS_WORD);
 
   /* Push argc*/
-  *esp -= word;
-  memcpy(*esp, &argc, word);
+  PUSH_STACK(esp);
+  memcpy(*esp, &argc, PINTOS_WORD);
 
   /* Push fake pointer */
-  *esp -= word;
-  memcpy(*esp, &null, word);
+  *esp -= PINTOS_WORD;
+  memset(*esp, 0, PINTOS_WORD);
 
   return success;
 }
