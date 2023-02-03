@@ -1,0 +1,197 @@
+             +--------------------------+
+             |          CS 212          |
+             | PROJECT 2: USER PROGRAMS |
+             |     DESIGN DOCUMENT      |
+             +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Abraham Yosef <ayosef@stanford.edu>
+Anthony Mensah <admensah@stanford.edu>
+Gordon Martinez-Piedra <martigp@stanford.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+               ARGUMENT PASSING
+               ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+/* Size of word used frequently when pushing to stack*/
+#define WORD_SIZE sizeof (void *)
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+The only difference from argument passing style of 80x86 described in
+Section 3.5 of the Pintos reference is that we order the tokenized
+literals in the opposite direction. This means we push words of
+the command in left to right order (whereas 3.5 does it in right to left).
+
+We implement this by tokenizing and pushing each word of the command onto
+the stack, each time incrementing our argument counter. In order to tokenize
+we first allocate a page to have an copyable version of the command string.
+Similarly, we allocate a page to store the addresses of each word of the 
+command pushed to the stack. The order of the addresses in this page are the
+same as the order that they are pushed.
+
+Next, we add the padding by looking at the current stack addres and rounding
+down to the nearest word size (4 for our 32-bit x86 simulators). We then copy
+each of the addresses of the arguments from the page we allocated onto the
+stack. To do this in the correct order, we start from the last address we
+added to the page of addresses, and iterate backwards (using the stored number
+of arguments to do so). 
+
+Finally we push argv, argc and the null return address.
+
+Since we know that the command line length is not greater than a page itself,
+once we have pushed all the arguments to the page, we then know how much more
+space will have to be allocated (4 bytes for each argument, 12 bytes for return
+argv, argcc and then however many padding bytes). If total bytes is greater
+than the number of pages then we return false.
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+The difference betwen strtok and strtok_r () is how the remaining string is
+stored. strtok () reads up to the first instance of a delimiter and stores
+the remainder of the string in a static buffer. strtok_r() on the other hand
+requires you to provide a SAVE_PTR which is set to point at remaining part of
+the string after the next delimiter.
+
+The reason that Pintos implements strtok_r() is because it provides the same
+functionality as strtok () but has thread safety. If multiple threads are using
+strtok, there is a data race on the static buffer, as all the threads use
+this to reference the remainder of the string that hasn't been parsed.
+
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+The first advantage is security. String operations are famously unsafe and
+can cause undefined behaviour. Performing the string operations involved in
+command tokenization to an application (the shell) rather than in the kernel
+mitigates and isolates the damage from any vulnerabilities in tokenization as
+well as protecting the critical infrastructure that is the kernel.
+
+The second advantage is a better abstraction of the kernel. The kernel is a
+low level interface with the hardware that abstracts the difficulty of doing
+so away from the applications. The shell on the other hand is an application,
+one layer of abstraction above the kernel. The tokenization of a command, which
+is directly passed to the shell therefore is much more alligned with the layer
+of abstraction that the shell provides. Once a verified command has been parsed
+then it makes sense to pass to the kernel to execute the command.
+
+A third advantage is that it allows for the simplification of the kernel.
+Having the shell parse the command allows the shell to perform the first
+steps for functionalities such as redirection and pipelining (applications
+that use system calls, rather than base kernel functionalities).
+
+                 SYSTEM CALLS
+                 ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+               SURVEY QUESTIONS
+               ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
