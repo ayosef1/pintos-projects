@@ -32,7 +32,7 @@ typedef int tid_t;
 
 #define RECENT_CPU_TIME_INITIAL 0       /* Initial thread's recent cpu time. */
 
-
+#define MAX_FILES 128
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -118,7 +118,11 @@ struct thread
     struct lock *waiting_lock;          /* Lock we are waiting for (if any)*/
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                  /* Page directory. */
+    uint32_t *pagedir;                 /* Page directory. */
+
+    struct file *fdtable[MAX_FILES];   /* File Descriptor Table*/
+    int next_fd;                       /* Smallest File Descriptor available */
+
 #endif
 
     /* Owned by thread.c. */
@@ -171,4 +175,5 @@ int thread_max_waiting_priority (struct thread *);
 bool thread_compare_priority (const struct list_elem *a,
                           const struct list_elem *b,
                           void *aux UNUSED);
+
 #endif /* threads/thread.h */

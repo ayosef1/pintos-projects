@@ -607,6 +607,21 @@ init_thread (struct thread *t, const char *name, int priority)
       }
   }
 
+  #ifdef USERPROG
+    int fd = STDIN_FILENO;
+
+    // Set STDIN & STDOUT to invalid ptrs
+    t->fdtable[fd++] = THREAD_MAGIC;
+    t->fdtable[fd++] = THREAD_MAGIC;
+
+    t->next_fd = fd;
+
+    for (; fd < MAX_FILES; fd++ ) {
+      t->fdtable[fd] = NULL;
+    }
+
+  #endif
+
   /* Initialize the list of locks held by current list*/
   list_init (&t->locks_held);
 

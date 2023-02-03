@@ -1,11 +1,16 @@
-#include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "devices/input.h"
+#include "filesys/directory.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/pagedir.h"
+#include "userprog/process.h"
+#include "userprog/syscall.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -25,18 +30,20 @@ static void sys_close (uint32_t *esp);
 
 static void exit (int status);
 
+static char *get_arg_fname (void *esp, int pos);
 static void *get_arg_buffer (void *esp, int pos, int size);
 static int get_arg_int (void *esp, int pos);
 static bool is_valid_address (const void *uaddr);
 static bool is_valid_memory (void *buffer, unsigned size);
+static bool is_valid_fd (int fd);
 
-static struct lock filesystem_lock;
+static struct lock filesys_lock;
 
 void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  lock_init (&filesystem_lock);
+  lock_init (&filesys_lock);
 }
 
 static void
@@ -77,15 +84,15 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_OPEN:                   /* Open a file. */
       // printf("%s\n", "about to open");
-      sys_open (f->esp);
+      f->eax = sys_open (f->esp);
       break;
     case SYS_FILESIZE:               /* Obtain a file's size. */
       // printf("%s\n", "about to filesize");
-      sys_filesize (f->esp);
+      f->eax = sys_filesize (f->esp);
       break;
     case SYS_READ:                   /* Read from a file. */
       // printf("%s\n", "about to read");
-      sys_read (f->esp);
+      f->eax = sys_read (f->esp);
       break;
     case SYS_WRITE:                  /* Write to a file. */
       // printf("%s\n", "about to write");
@@ -149,7 +156,18 @@ sys_wait (uint32_t *esp UNUSED)
 bool
 sys_create (uint32_t *esp UNUSED)
 {
-  return false;
+  char * fname;
+  off_t initial_size;
+
+  fname = get_arg_fname (esp, 1);
+  initial_size = get_arg_int (esp, 2);
+
+  bool ret = false;
+  lock_acquire (&filesys_lock);
+  ret = filesys_create (fname, initial_size);
+  lock_release (&filesys_lock);
+
+  return ret;
 }
 
 bool
@@ -161,94 +179,252 @@ sys_remove (uint32_t *esp UNUSED)
 int
 sys_open (uint32_t *esp UNUSED)
 {
-  return 0;
+  char * fname = get_arg_fname (esp, 1);
+  struct thread *cur;
+  int ret = -1;
+
+  lock_acquire (&filesys_lock);
+  struct file *fp = filesys_open (fname);
+  lock_release (&filesys_lock);
+
+  cur = thread_current ();
+
+  // File open unsuccessful or file limit hit
+  if (fp == NULL || cur->next_fd < 0)
+    return ret;
+
+  ret = cur->next_fd;
+  cur->fdtable[ret] = fp;
+  
+  int new_fd = STDOUT_FILENO + 1;
+  for (; new_fd < MAX_FILES; new_fd++) 
+    {
+      if (cur->fdtable[new_fd] == NULL)
+      {
+        cur->next_fd = new_fd;
+        break;
+      }
+    }
+
+  if (new_fd == MAX_FILES)
+    cur->next_fd = -1;
+  
+  return ret;
+
 }
 
 int
 sys_filesize (uint32_t *esp UNUSED)
 {
-  return 0;
+  int fd;
+  
+  fd = get_arg_int (esp, 1);
+
+  if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
+    exit (-1);
+  
+  struct file *file = thread_current ()->fdtable[fd];
+
+	if (file == NULL)
+		exit (-1);
+  
+	return file_length (file);
 }
+
+/* Cases:
+   1) invalid fd (too large) silent
+   2) Normal normal
+   3) silent on stdin / stdout
+   4) fd doesn't exist fail silently
+   */
 
 int
 sys_read (uint32_t *esp UNUSED)
 {
-  return 0;
+
+  int fd;
+  uint8_t *buffer;
+  unsigned size;
+  int bytes_read = 0;
+
+  fd = get_arg_int (esp, 1);
+  size = get_arg_int (esp, 3);
+  buffer = (uint8_t *) get_arg_buffer (esp, 2, size);
+
+  if (!is_valid_fd (fd) || fd == STDOUT_FILENO)
+    {
+      return -1;
+    }
+  else if (fd == STDIN_FILENO)
+    {
+      while (size--)
+        {
+          *buffer++ = input_getc ();
+          bytes_read++;
+        }
+    }
+  else
+    {
+        struct thread *cur = thread_current ();
+        struct file *fp = cur->fdtable[fd];
+
+        if (fp == NULL) {
+          return -1;
+        }
+
+        lock_acquire (&filesys_lock);
+        bytes_read = file_read(fp, buffer, size);
+        lock_release (&filesys_lock);
+    }
+  
+  return bytes_read;
 }
 
-int
+#define BUF_MAX 512;
+
+static int
 sys_write (uint32_t *esp)
 {
-  int written;
+  int bytes_written = 0;
 
   int fd;
   char *buffer;
   unsigned size;
 
-  lock_acquire (&filesystem_lock);
   fd = get_arg_int (esp, 1);
   size = get_arg_int (esp, 3);
   buffer = get_arg_buffer (esp, 2, size);
-  // printf("fd is %d\n", fd);
-  // printf("size is %d\n", size);
-  // printf("buffer is %s\n", (char *)buffer);
 
   /* only handle writing to console for now */
-  if (fd == STDOUT_FILENO)
+  if (!is_valid_fd (fd) || fd == STDIN_FILENO)
+    {
+      return -1;
+    }
+  else if (fd == STDOUT_FILENO)
     {
       int remaining = size;
       while (remaining > 0)
         {
           putbuf (buffer, size);
-          remaining -= 512;
+          remaining -= BUF_MAX;
         }
-      written = size;
+      bytes_written = size;
     }
-  lock_release (&filesystem_lock);
-  return written;
+  else 
+  {
+    struct thread *cur = thread_current ();
+    struct file *fp = cur->fdtable[fd];
+
+    if (fp == NULL) 
+      return -1;
+
+    lock_acquire (&filesys_lock);
+    bytes_written = file_write (fp, buffer, size);
+    lock_release (&filesys_lock);
+  }
+  return bytes_written;
 }
 
-void
+static void
 sys_seek (uint32_t *esp UNUSED)
 {
 
 }
 
-unsigned
+static unsigned
 sys_tell (uint32_t *esp UNUSED)
 {
   return 1;
 }
 
-void
+static void
 sys_close (uint32_t *esp UNUSED)
 {
+  int fd;
+
+  fd = get_arg_int (esp, 1);
+
+  if (fd >= MAX_FILES || fd == STDIN_FILENO || fd == STDOUT_FILENO)
+    return;
+  
+  struct thread *cur = thread_current ();
+  struct file *fp = cur->fdtable[fd];
+
+  if (fp == NULL)
+    return;
+  
+  lock_acquire (&filesys_lock);
+  file_close (fp);
+  lock_release (&filesys_lock);
+
+  cur->fdtable[fd] = NULL;
+
+  if (fd < cur->next_fd)
+    cur->next_fd = fd;
 
 }
 
-int
+static int
 get_arg_int (void *esp, int pos)
 {
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
-  if (!is_valid_memory (arg, sizeof(int)))
+  if (!is_valid_memory (arg, sizeof (int)))
     exit (-1);
 
   return *(int *)arg;
 }
 
-void *
+static void *
 get_arg_buffer (void *esp, int pos, int size)
 {
-  uint32_t *arg;
+  void **arg;
 
-  arg = (uint32_t *)esp + pos;
-  if (!is_valid_memory (arg, size))
+  arg = (void **)esp + pos;
+  
+  if (!is_valid_address (arg))
     exit (-1);
+  
+  // TODO: If not short circuit combine these
+  if (!is_valid_memory (*arg, size))
+    exit (-1);
+
   return *(void **)arg;
 }
 
-bool 
+static char *
+get_arg_fname (void *esp, int pos)
+{
+  char **fname_ptr;
+  char *cur;
+  char *end;
+
+  fname_ptr = (char **)esp + pos;
+
+  if (!is_valid_address(fname_ptr))
+    exit(-1);
+
+  end = *fname_ptr + NAME_MAX + 1;
+
+  
+  for (cur = *fname_ptr; cur < end; cur++)
+    {
+      if (!is_valid_address (cur) 
+          || pagedir_get_page (thread_current ()->pagedir, cur) == NULL)
+        exit(-1);
+      
+      if (*cur == '\0')
+        break;
+      
+    }
+  
+  if (cur == *fname_ptr || cur == end)
+    exit(-1);
+  
+  return *fname_ptr;
+}
+
+static bool 
 is_valid_memory (void *start, unsigned size)
 {
   /* depending on operation, might need to double check permissions. */
@@ -265,8 +441,13 @@ is_valid_memory (void *start, unsigned size)
   return true;
 }
 
-bool 
+static bool 
 is_valid_address (const void *vaddr)
 {
   return vaddr != NULL && is_user_vaddr (vaddr);
+}
+
+static bool
+is_valid_fd (int fd) {
+  return fd >= 0 && fd < MAX_FILES;
 }
