@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "devices/timer.h"
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
@@ -98,8 +99,7 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  /* Temporarily an infinite loop. Will need to be implemented later. */
-  for (;;);
+  timer_sleep(100);
   return -1;
 }
 
@@ -206,6 +206,9 @@ struct Elf32_Phdr
 #define PF_X 1          /* Executable. */
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
+
+/* Pushes a word at SRC to the minimal stack pointed to by *ESP */
+#define PUSH_STACK(ESP) *ESP -= WORD_SIZE
 
 static bool setup_stack (void **esp, const char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
@@ -324,7 +327,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Set up stack. */
   if (!setup_stack (esp, file_name))
     goto done;
-
+  
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
@@ -452,6 +455,8 @@ setup_stack (void **esp, const char *file_name)
   uint8_t *kpage;
   bool success = false;
 
+  // 64-bit so we don't assume word length
+
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
@@ -462,6 +467,9 @@ setup_stack (void **esp, const char *file_name)
         palloc_free_page (kpage);
     }
 
+  // uint64_t to make sure works for all address lengths
+  uint64_t start_height = (uint64_t) *esp;
+
   char *token, *save_ptr;
   char *file_name_copy = palloc_get_page (0);
   if (file_name_copy == NULL)
@@ -469,10 +477,9 @@ setup_stack (void **esp, const char *file_name)
 
   strlcpy (file_name_copy, file_name, PGSIZE);
 
-  char *array = palloc_get_page (0);
-  if (array == NULL)
+  char **argv = palloc_get_page (0);
+  if (argv == NULL)
     return false;
-  char **argv = (char **) array;
 
   int argc = 0;
   for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
@@ -480,14 +487,24 @@ setup_stack (void **esp, const char *file_name)
   {
     size_t length = strlen (token) + 1;
     *esp -= length;
-    memcpy (*esp, token, length);
+    strlcpy (*esp, token, length);
     argv[argc] = *esp;
     argc++;
   }
 
-  size_t word = 4;
+  palloc_free_page(file_name_copy);
 
-  int padding = (size_t) *esp % word;
+  int padding = (size_t) *esp % WORD_SIZE;
+
+    // Calculate if will overflow 1 page
+    // Magic 12 is bytes needed for argc, argv and ret address
+    // 3 * WORD_SIZE
+  uint64_t stack_bytes_needed = (start_height - (uint64_t) *esp) +
+                                (WORD_SIZE * argc) + 12 + padding;
+  
+  if (stack_bytes_needed > PGSIZE)
+    return false;
+
   if (padding)
   {
     *esp -= padding;
@@ -495,28 +512,30 @@ setup_stack (void **esp, const char *file_name)
   }
 
   /* Push Null Pointer Sentinel as required by C standard*/
-  *esp -= word;
-  memset (*esp, 0, word);
+  *esp -= WORD_SIZE;
+  memset(*esp, 0, WORD_SIZE);
 
   /* Push arguments in reverse order*/
   for (int i = argc - 1; i >= 0; i--) 
   {
-    *esp -= word;
-    memcpy (*esp, &argv[i], word);
+    PUSH_STACK(esp);
+    memcpy (*esp, &argv[i], WORD_SIZE);
   }
 
+  palloc_free_page (argv);
+
   /* Push address of argv*/
-  *esp -= word;
-  memcpy (*esp, &(*esp)+word, word);
+  void * first_arg_addr = *esp;
+  PUSH_STACK(esp);
+  memcpy (*esp, &first_arg_addr, WORD_SIZE);
 
   /* Push argc*/
-  *esp -= word;
-  memcpy (*esp, &argc, word);
+  PUSH_STACK(esp);
+  memcpy(*esp, &argc, WORD_SIZE);
 
   /* Push fake pointer */
-  *esp -= word;
-  uint32_t null = 0;
-  memcpy (*esp, &null, word);
+  *esp -= WORD_SIZE;
+  memset(*esp, 0, WORD_SIZE);
 
   return success;
 }

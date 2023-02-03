@@ -30,19 +30,80 @@ Gordon Martinez-Piedra <martigp@stanford.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+/* Size of word used frequently when pushing to stack*/
+#define WORD_SIZE sizeof (void *)
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe how you implemented argument parsing.  How do
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
 
+The only difference from argument passing style of 80x86 described in
+Section 3.5 of the Pintos reference is that we order the tokenized
+literals in the opposite direction. This means we push words of
+the command in left to right order (whereas 3.5 does it in right to left).
+
+We implement this by tokenizing and pushing each word of the command onto
+the stack, each time incrementing our argument counter. In order to tokenize
+we first allocate a page to have an copyable version of the command string.
+Similarly, we allocate a page to store the addresses of each word of the 
+command pushed to the stack. The order of the addresses in this page are the
+same as the order that they are pushed.
+
+Next, we add the padding by looking at the current stack addres and rounding
+down to the nearest word size (4 for our 32-bit x86 simulators). We then copy
+each of the addresses of the arguments from the page we allocated onto the
+stack. To do this in the correct order, we start from the last address we
+added to the page of addresses, and iterate backwards (using the stored number
+of arguments to do so). 
+
+Finally we push argv, argc and the null return address.
+
+Since we know that the command line length is not greater than a page itself,
+once we have pushed all the arguments to the page, we then know how much more
+space will have to be allocated (4 bytes for each argument, 12 bytes for return
+argv, argcc and then however many padding bytes). If total bytes is greater
+than the number of pages then we return false.
+
 ---- RATIONALE ----
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
 
+The difference betwen strtok and strtok_r () is how the remaining string is
+stored. strtok () reads up to the first instance of a delimiter and stores
+the remainder of the string in a static buffer. strtok_r() on the other hand
+requires you to provide a SAVE_PTR which is set to point at remaining part of
+the string after the next delimiter.
+
+The reason that Pintos implements strtok_r() is because it provides the same
+functionality as strtok () but has thread safety. If multiple threads are using
+strtok, there is a data race on the static buffer, as all the threads use
+this to reference the remainder of the string that hasn't been parsed.
+
+
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
+
+The first advantage is security. String operations are famously unsafe and
+can cause undefined behaviour. Performing the string operations involved in
+command tokenization to an application (the shell) rather than in the kernel
+mitigates and isolates the damage from any vulnerabilities in tokenization as
+well as protecting the critical infrastructure that is the kernel.
+
+The second advantage is a better abstraction of the kernel. The kernel is a
+low level interface with the hardware that abstracts the difficulty of doing
+so away from the applications. The shell on the other hand is an application,
+one layer of abstraction above the kernel. The tokenization of a command, which
+is directly passed to the shell therefore is much more alligned with the layer
+of abstraction that the shell provides. Once a verified command has been parsed
+then it makes sense to pass to the kernel to execute the command.
+
+A third advantage is that it allows for the simplification of the kernel.
+Having the shell parse the command allows the shell to perform the first
+steps for functionalities such as redirection and pipelining (applications
+that use system calls, rather than base kernel functionalities).
 
                  SYSTEM CALLS
                  ============

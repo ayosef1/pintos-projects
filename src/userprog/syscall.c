@@ -48,7 +48,7 @@ syscall_handler (struct intr_frame *f)
     exit (-1);
 
   syscall_num = get_arg_int(f->esp, 0);
-  printf("syscall_num = %d\n", syscall_num);
+  // printf("syscall_num = %d\n", syscall_num);
   switch (syscall_num)
   {
     case SYS_HALT:                   /* Halt the operating system. */
@@ -104,7 +104,7 @@ syscall_handler (struct intr_frame *f)
       sys_close (f->esp);
       break;
     default:
-      exit(-1000);
+      exit(-1);
   }
 }
 
@@ -115,6 +115,7 @@ exit (int status)
 
   cur = thread_current ();
   printf ("%s: exit(%d)\n", cur->name, status);
+  /* Clean up all file descriptors. */
   thread_exit ();
 }
 
@@ -129,7 +130,7 @@ sys_exit (uint32_t *esp)
 {
   int status;
   status = get_arg_int (esp, 1);
-  printf("status is %d\n", status);
+  // printf("status is %d\n", status);
   exit (status);
 }
 
@@ -178,6 +179,8 @@ sys_read (uint32_t *esp UNUSED)
 int
 sys_write (uint32_t *esp)
 {
+  int written;
+
   int fd;
   char *buffer;
   unsigned size;
@@ -186,9 +189,9 @@ sys_write (uint32_t *esp)
   fd = get_arg_int (esp, 1);
   size = get_arg_int (esp, 3);
   buffer = get_arg_buffer (esp, 2, size);
-  printf("fd is %d\n", fd);
-  printf("size is %d\n", size);
-  printf("buffer is %s\n", (char *)buffer);
+  // printf("fd is %d\n", fd);
+  // printf("size is %d\n", size);
+  // printf("buffer is %s\n", (char *)buffer);
 
   /* only handle writing to console for now */
   if (fd == STDOUT_FILENO)
@@ -199,9 +202,10 @@ sys_write (uint32_t *esp)
           putbuf (buffer, size);
           remaining -= 512;
         }
+      written = size;
     }
   lock_release (&filesystem_lock);
-  return size;
+  return written;
 }
 
 void
@@ -228,7 +232,7 @@ get_arg_int (void *esp, int pos)
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
   if (!is_valid_memory (arg, sizeof(int)))
-    exit (-3);
+    exit (-1);
 
   return *(int *)arg;
 }
@@ -240,7 +244,7 @@ get_arg_buffer (void *esp, int pos, int size)
 
   arg = (uint32_t *)esp + pos;
   if (!is_valid_memory (arg, size))
-    exit (-4);
+    exit (-1);
   return *(void **)arg;
 }
 

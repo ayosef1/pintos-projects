@@ -397,7 +397,7 @@ thread_set_priority (int new_priority)
   ASSERT (!intr_context ());
   old_level = intr_disable ();
 
-  struct thread *cur = thread_current ();
+  struct thread * cur = thread_current ();
 
   bool change_priority = cur->original_priority == cur->priority
                          || new_priority > cur->priority;
