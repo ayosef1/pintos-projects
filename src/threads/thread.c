@@ -333,9 +333,12 @@ thread_tid (void)
 void
 thread_exit (void) 
 {
+  struct thread *cur = thread_current ();
+
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
+  printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
   process_exit ();
 #endif
 
@@ -344,7 +347,7 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+  cur->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
 }

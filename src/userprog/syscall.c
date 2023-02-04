@@ -105,11 +105,8 @@ syscall_handler (struct intr_frame *f)
 void
 exit (int status)
 {
-  struct thread *cur;
-
-  cur = thread_current ();
-  printf ("%s: exit(%d)\n", cur->name, status);
-
+  thread_current ()->exit_status = status;
+  
   /* TODO: Clean up all file descriptors. */
 
   thread_exit ();

@@ -122,7 +122,7 @@ struct thread
 
     struct file *fdtable[MAX_FILES];   /* File Descriptor Table*/
     int next_fd;                       /* Smallest File Descriptor available */
-
+    int exit_status;
 #endif
 
     /* Owned by thread.c. */
