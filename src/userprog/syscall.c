@@ -38,8 +38,9 @@ static void exit (int status);
 static char *get_arg_string (void *esp, int pos, int limit);
 static void *get_arg_buffer (void *esp, int pos, int size);
 static int get_arg_int (void *esp, int pos);
-static bool is_valid_address (const void *uaddr);
+
 static bool is_valid_memory (void *buffer, unsigned size);
+static bool is_valid_address (const void *uaddr);
 static bool is_valid_fd (int fd);
 
 static struct lock filesys_lock;
@@ -56,7 +57,7 @@ syscall_handler (struct intr_frame *f)
 {
   uint32_t syscall_num;
 
-  if (!is_valid_address (f->esp))
+  if (!is_valid_memory (f->esp, sizeof(char *)))
     exit (-1);
 
   syscall_num = get_arg_int(f->esp, 0);
@@ -436,7 +437,7 @@ get_arg_buffer (void *esp, int pos, int size)
 
   arg = (void **)esp + pos;
   
-  if (!is_valid_address (arg) || !is_valid_memory (*arg, size))
+  if (!is_valid_memory (arg, sizeof(char *)) || !is_valid_memory (*arg, size))
     exit (-1);
 
   return *(void **)arg;
@@ -451,7 +452,7 @@ get_arg_string (void *esp, int pos, int limit)
 
   fname_ptr = (char **)esp + pos;
 
-  if (!is_valid_address(fname_ptr))
+  if (!is_valid_memory (fname_ptr, sizeof (char *)))
     exit(-1);
 
   end = *fname_ptr + limit + 1;
@@ -485,11 +486,11 @@ is_valid_memory (void *start, unsigned size)
   
   end = (uint8_t *)start + size;
   for (cur = start; cur < end; cur++)
-  {
-    if (!is_valid_address (cur) 
-        || pagedir_get_page (thread_current ()->pagedir, cur) == NULL)
-      return false;
-  }
+    {
+      if (!is_valid_address (cur) 
+          || pagedir_get_page (thread_current ()->pagedir, cur) == NULL)
+        return false;
+    }
   return true;
 }
 
