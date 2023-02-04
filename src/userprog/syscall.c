@@ -68,19 +68,19 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_EXEC:                   /* Start another process. */
       // printf("%s\n", "about to exec");
-      sys_exec (f->esp);
+      f->eax = sys_exec (f->esp);
       break;
     case SYS_WAIT:                   /* Wait for a child process to die. */
       // printf("%s\n", "about to wait");
-      sys_wait (f->esp);
+      f->eax = sys_wait (f->esp);
       break;
     case SYS_CREATE:                 /* Create a file. */
       // printf("%s\n", "about to create");
-      sys_create (f->esp);
+      f->eax = sys_create (f->esp);
       break;
     case SYS_REMOVE:                 /* Delete a file. */
       // printf("%s\n", "about to remove");
-      sys_remove (f->esp);
+      f->eax = sys_remove (f->esp);
       break;
     case SYS_OPEN:                   /* Open a file. */
       // printf("%s\n", "about to open");
@@ -104,7 +104,7 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_TELL:                   /* Report current position in a file. */
       // printf("%s\n", "about to tell");
-      sys_tell (f->esp);
+      f->eax = sys_tell (f->esp);
       break;
     case SYS_CLOSE:                  /* Close a file. */
       // printf("%s\n", "about to close");
@@ -122,7 +122,9 @@ exit (int status)
 
   cur = thread_current ();
   printf ("%s: exit(%d)\n", cur->name, status);
-  /* Clean up all file descriptors. */
+
+  /* TODO: Clean up all file descriptors. */
+
   thread_exit ();
 }
 
@@ -137,7 +139,6 @@ sys_exit (uint32_t *esp)
 {
   int status;
   status = get_arg_int (esp, 1);
-  // printf("status is %d\n", status);
   exit (status);
 }
 
@@ -158,15 +159,18 @@ sys_create (uint32_t *esp UNUSED)
 {
   char * fname;
   off_t initial_size;
+  bool ret = false;
 
   fname = get_arg_fname (esp, 1);
-  initial_size = get_arg_int (esp, 2);
 
-  bool ret = false;
-  lock_acquire (&filesys_lock);
-  ret = filesys_create (fname, initial_size);
-  lock_release (&filesys_lock);
-
+  /* Filename cannot be the empty string. */
+  if (*fname != '\0')
+  {
+    initial_size = get_arg_int (esp, 2);
+    lock_acquire (&filesys_lock);
+    ret = filesys_create (fname, initial_size);
+    lock_release (&filesys_lock);
+  }
   return ret;
 }
 
@@ -183,13 +187,17 @@ sys_open (uint32_t *esp UNUSED)
   struct thread *cur;
   int ret = -1;
 
+  /* Filename cannot be the empty string. */
+  if (*fname == '\0')
+    return ret;
+
   lock_acquire (&filesys_lock);
   struct file *fp = filesys_open (fname);
   lock_release (&filesys_lock);
 
   cur = thread_current ();
 
-  // File open unsuccessful or file limit hit
+  /* File open unsuccessful or file limit hit */
   if (fp == NULL || cur->next_fd < 0)
     return ret;
 
@@ -382,12 +390,12 @@ get_arg_buffer (void *esp, int pos, int size)
 
   arg = (void **)esp + pos;
   
-  if (!is_valid_address (arg))
+  if (!is_valid_address (arg) || !is_valid_memory (*arg, size))
     exit (-1);
   
-  // TODO: If not short circuit combine these
-  if (!is_valid_memory (*arg, size))
-    exit (-1);
+  // // TODO: If not short circuit combine these
+  // if (!is_valid_memory (*arg, size))
+  //   exit (-1);
 
   return *(void **)arg;
 }
@@ -418,7 +426,7 @@ get_arg_fname (void *esp, int pos)
       
     }
   
-  if (cur == *fname_ptr || cur == end)
+  if (cur == end)
     exit(-1);
   
   return *fname_ptr;
