@@ -148,6 +148,28 @@ process_exit (void)
   sema_up (&cur->wait_for_child);
   sema_down (&cur->wait_for_parent);
 
+  /* Close all file descriptors. */
+  int i;
+  for (i = STDOUT_FILENO + 1; i < MAX_FILES; i++)
+    {
+      if (cur->fdtable[i].fp != NULL)
+      {
+        file_close (cur->fdtable[i].fp);
+        cur->fdtable[i].fp = NULL;
+        cur->fdtable[i].read_pos = 0;
+        cur->fdtable[i].write_pos = 0;
+      }
+    }
+  
+  /* Release all locks held by thread. */
+  struct list_elem *e;
+  for (e = list_begin (&cur->locks_held); e != list_end (&cur->locks_held);
+       e = list_next (e))
+    {
+      struct lock *l = list_entry (e, struct lock, locks_held_elem);
+      lock_release (l);
+    }
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;

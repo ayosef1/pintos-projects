@@ -112,7 +112,8 @@ exit (int status)
 {
   thread_current ()->exit_status = status;
   
-  /* TODO: Clean up all file descriptors. */
+  /* We clean everything up in process_exit since we might not 
+     go through here. */
 
   thread_exit ();
 }
