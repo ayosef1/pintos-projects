@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <syscall-nr.h>
 #include "devices/input.h"
 #include "devices/shutdown.h"
@@ -6,12 +7,15 @@
 #include "filesys/filesys.h"
 #include "filesys/file.h"
 #include "threads/interrupt.h"
+#include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
+
+#define CMD_LINE_MAX 128
 
 static void syscall_handler (struct intr_frame *);
 
@@ -31,7 +35,7 @@ static void sys_close (uint32_t *esp);
 
 static void exit (int status);
 
-static char *get_arg_fname (void *esp, int pos);
+static char *get_arg_string (void *esp, int pos, int limit);
 static void *get_arg_buffer (void *esp, int pos, int size);
 static int get_arg_int (void *esp, int pos);
 static bool is_valid_address (const void *uaddr);
@@ -127,15 +131,43 @@ sys_exit (uint32_t *esp)
 }
 
 pid_t
-sys_exec (uint32_t *esp UNUSED)
+sys_exec (uint32_t *esp)
 {
-  return 0;
+  char *cmd_line;
+  char *cmd_line_cpy;
+  char *filename;
+
+  cmd_line = get_arg_string (esp, 1, CMD_LINE_MAX);
+  if (cmd_line == NULL)
+    return TID_ERROR;
+  
+  /* Check if file exists. */
+  cmd_line_cpy = palloc_get_page (0);
+  if (cmd_line_cpy == NULL)
+    return TID_ERROR;
+  strlcpy (cmd_line_cpy, cmd_line, PGSIZE);
+
+  char *save_ptr;
+  filename = strtok_r(cmd_line_cpy, " ", &save_ptr);
+  lock_acquire (&filesys_lock);
+  if (filesys_open (filename) == NULL)
+  {
+    lock_release (&filesys_lock);
+    return TID_ERROR;
+  }
+  lock_release (&filesys_lock);
+  
+  return process_execute (cmd_line);
 }
 
 int
-sys_wait (uint32_t *esp UNUSED)
+sys_wait (uint32_t *esp)
 {
-  return 0;
+  pid_t pid;
+
+  pid = get_arg_int (esp, 1);
+
+  return process_wait (pid);
 }
 
 bool
@@ -145,7 +177,7 @@ sys_create (uint32_t *esp)
   off_t initial_size;
   bool ret = false;
 
-  fname = get_arg_fname (esp, 1);
+  fname = get_arg_string (esp, 1, NAME_MAX);
 
   if (fname != NULL)
   {
@@ -161,7 +193,7 @@ bool
 sys_remove (uint32_t *esp)
 {
   bool ret = false;
-  char *fname = get_arg_fname (esp, 1);
+  char *fname = get_arg_string (esp, 1, NAME_MAX);
 
   if (fname != NULL)
   {
@@ -176,7 +208,7 @@ int
 sys_open (uint32_t *esp)
 {
   int ret = -1;
-  char *fname = get_arg_fname (esp, 1);
+  char *fname = get_arg_string (esp, 1, NAME_MAX);
   struct thread *cur = thread_current ();
 
   if (fname == NULL)
@@ -411,7 +443,7 @@ get_arg_buffer (void *esp, int pos, int size)
 }
 
 static char *
-get_arg_fname (void *esp, int pos)
+get_arg_string (void *esp, int pos, int limit)
 {
   char **fname_ptr;
   char *cur;
@@ -422,7 +454,7 @@ get_arg_fname (void *esp, int pos)
   if (!is_valid_address(fname_ptr))
     exit(-1);
 
-  end = *fname_ptr + NAME_MAX + 1;
+  end = *fname_ptr + limit + 1;
 
   
   for (cur = *fname_ptr; cur < end; cur++)

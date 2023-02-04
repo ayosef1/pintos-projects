@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/fixed-point.h"
+#include "threads/synch.h"
 
 
 /* States in a thread's life cycle. */
@@ -137,6 +138,13 @@ struct thread
     struct fdtable_entry fdtable[MAX_FILES];    /* File Descriptor Table. */
     int next_fd;                                /* Smallest available fd. */
     int exit_status;                            /* Exit status of thread. */
+    struct list children;                       /* List of child structs. */
+    struct list_elem children_elem;
+    struct lock children_lock;
+             
+    struct semaphore wait_for_child;
+    struct semaphore wait_for_parent;
+
 #endif
 
     /* Owned by thread.c. */

@@ -338,7 +338,6 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
   process_exit ();
 #endif
 
@@ -624,7 +623,17 @@ init_thread (struct thread *t, const char *name, int priority)
       t->fdtable[fd].read_pos = 0;
       t->fdtable[fd].write_pos = 0;
     }
+    list_init (&t->children);
+    lock_init (&t->children_lock);
+    sema_init (&t->wait_for_child, 0);
+    sema_init (&t->wait_for_parent, 0);
 
+    if (t != initial_thread)
+    {
+      lock_acquire (&thread_current ()->children_lock);
+      list_push_back (&thread_current ()->children, &t->children_elem);
+      lock_release (&thread_current ()->children_lock);
+    }
   #endif
 
   /* Initialize the list of locks held by current list*/
