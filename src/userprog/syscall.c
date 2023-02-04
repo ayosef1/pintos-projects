@@ -155,7 +155,7 @@ sys_wait (uint32_t *esp UNUSED)
 }
 
 bool
-sys_create (uint32_t *esp UNUSED)
+sys_create (uint32_t *esp)
 {
   char * fname;
   off_t initial_size;
@@ -164,7 +164,7 @@ sys_create (uint32_t *esp UNUSED)
   fname = get_arg_fname (esp, 1);
 
   /* Filename cannot be the empty string. */
-  if (*fname != '\0')
+  if (fname != NULL)
   {
     initial_size = get_arg_int (esp, 2);
     lock_acquire (&filesys_lock);
@@ -181,14 +181,14 @@ sys_remove (uint32_t *esp UNUSED)
 }
 
 int
-sys_open (uint32_t *esp UNUSED)
+sys_open (uint32_t *esp)
 {
-  char * fname = get_arg_fname (esp, 1);
+  char *fname = get_arg_fname (esp, 1);
   struct thread *cur;
   int ret = -1;
 
   /* Filename cannot be the empty string. */
-  if (*fname == '\0')
+  if (fname == NULL)
     return ret;
 
   lock_acquire (&filesys_lock);
@@ -222,7 +222,7 @@ sys_open (uint32_t *esp UNUSED)
 }
 
 int
-sys_filesize (uint32_t *esp UNUSED)
+sys_filesize (uint32_t *esp)
 {
   int fd;
   
@@ -247,7 +247,7 @@ sys_filesize (uint32_t *esp UNUSED)
    */
 
 int
-sys_read (uint32_t *esp UNUSED)
+sys_read (uint32_t *esp)
 {
 
   int fd;
@@ -346,7 +346,7 @@ sys_tell (uint32_t *esp UNUSED)
 }
 
 static void
-sys_close (uint32_t *esp UNUSED)
+sys_close (uint32_t *esp)
 {
   int fd;
 
@@ -426,8 +426,10 @@ get_arg_fname (void *esp, int pos)
       
     }
   
-  if (cur == end)
-    exit(-1);
+  /* Return to Null indicate that filename
+     was either empty or too long. */
+  if (cur == *fname_ptr || cur == end)
+    *fname_ptr = NULL;
   
   return *fname_ptr;
 }
