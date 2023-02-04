@@ -525,7 +525,7 @@ setup_stack (void **esp, const char *file_name)
   palloc_free_page (argv);
 
   /* Push address of argv*/
-  void * first_arg_addr = *esp;
+  void *first_arg_addr = *esp;
   PUSH_STACK(esp);
   memcpy (*esp, &first_arg_addr, WORD_SIZE);
 

@@ -55,59 +55,45 @@ syscall_handler (struct intr_frame *f)
     exit (-1);
 
   syscall_num = get_arg_int(f->esp, 0);
-  // printf("syscall_num = %d\n", syscall_num);
   switch (syscall_num)
   {
     case SYS_HALT:                   /* Halt the operating system. */
-      // printf ("%s\n", "about to halt");
       sys_halt ();
       break;
     case SYS_EXIT:                   /* Terminate this process. */
-      // printf("%s\n", "about to exit");
       sys_exit (f->esp);
       break;
     case SYS_EXEC:                   /* Start another process. */
-      // printf("%s\n", "about to exec");
       f->eax = sys_exec (f->esp);
       break;
     case SYS_WAIT:                   /* Wait for a child process to die. */
-      // printf("%s\n", "about to wait");
       f->eax = sys_wait (f->esp);
       break;
     case SYS_CREATE:                 /* Create a file. */
-      // printf("%s\n", "about to create");
       f->eax = sys_create (f->esp);
       break;
     case SYS_REMOVE:                 /* Delete a file. */
-      // printf("%s\n", "about to remove");
       f->eax = sys_remove (f->esp);
       break;
     case SYS_OPEN:                   /* Open a file. */
-      // printf("%s\n", "about to open");
       f->eax = sys_open (f->esp);
       break;
     case SYS_FILESIZE:               /* Obtain a file's size. */
-      // printf("%s\n", "about to filesize");
       f->eax = sys_filesize (f->esp);
       break;
     case SYS_READ:                   /* Read from a file. */
-      // printf("%s\n", "about to read");
       f->eax = sys_read (f->esp);
       break;
     case SYS_WRITE:                  /* Write to a file. */
-      // printf("%s\n", "about to write");
       f->eax = sys_write (f->esp);
       break;
     case SYS_SEEK:                   /* Change position in a file. */
-      // printf("%s\n", "about to seek");
       sys_seek (f->esp);
       break;
     case SYS_TELL:                   /* Report current position in a file. */
-      // printf("%s\n", "about to tell");
       f->eax = sys_tell (f->esp);
       break;
     case SYS_CLOSE:                  /* Close a file. */
-      // printf("%s\n", "about to close");
       sys_close (f->esp);
       break;
     default:
@@ -157,13 +143,12 @@ sys_wait (uint32_t *esp UNUSED)
 bool
 sys_create (uint32_t *esp)
 {
-  char * fname;
+  char *fname;
   off_t initial_size;
   bool ret = false;
 
   fname = get_arg_fname (esp, 1);
 
-  /* Filename cannot be the empty string. */
   if (fname != NULL)
   {
     initial_size = get_arg_int (esp, 2);
@@ -187,7 +172,6 @@ sys_open (uint32_t *esp)
   struct thread *cur;
   int ret = -1;
 
-  /* Filename cannot be the empty string. */
   if (fname == NULL)
     return ret;
 
@@ -238,13 +222,6 @@ sys_filesize (uint32_t *esp)
   
 	return file_length (file);
 }
-
-/* Cases:
-   1) invalid fd (too large) silent
-   2) Normal normal
-   3) silent on stdin / stdout
-   4) fd doesn't exist fail silently
-   */
 
 int
 sys_read (uint32_t *esp)
@@ -303,7 +280,6 @@ sys_write (uint32_t *esp)
   size = get_arg_int (esp, 3);
   buffer = get_arg_buffer (esp, 2, size);
 
-  /* only handle writing to console for now */
   if (!is_valid_fd (fd) || fd == STDIN_FILENO)
     {
       return -1;
@@ -392,10 +368,6 @@ get_arg_buffer (void *esp, int pos, int size)
   
   if (!is_valid_address (arg) || !is_valid_memory (*arg, size))
     exit (-1);
-  
-  // // TODO: If not short circuit combine these
-  // if (!is_valid_memory (*arg, size))
-  //   exit (-1);
 
   return *(void **)arg;
 }
@@ -426,7 +398,7 @@ get_arg_fname (void *esp, int pos)
       
     }
   
-  /* Return to Null indicate that filename
+  /* Null indicates that filename
      was either empty or too long. */
   if (cur == *fname_ptr || cur == end)
     *fname_ptr = NULL;
@@ -437,7 +409,7 @@ get_arg_fname (void *esp, int pos)
 static bool 
 is_valid_memory (void *start, unsigned size)
 {
-  /* depending on operation, might need to double check permissions. */
+  /* TODO: depending on operation, might need to double check permissions. */
   uint8_t *cur;
   uint8_t *end;
   
