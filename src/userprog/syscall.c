@@ -166,9 +166,9 @@ sys_remove (uint32_t *esp UNUSED)
 int
 sys_open (uint32_t *esp)
 {
-  char *fname = get_arg_fname (esp, 1);
-  struct thread *cur;
   int ret = -1;
+  char *fname = get_arg_fname (esp, 1);
+  struct thread *cur = thread_current ();
 
   if (fname == NULL)
     return ret;
@@ -176,8 +176,6 @@ sys_open (uint32_t *esp)
   lock_acquire (&filesys_lock);
   struct file *fp = filesys_open (fname);
   lock_release (&filesys_lock);
-
-  cur = thread_current ();
 
   /* File open unsuccessful or file limit hit */
   if (fp == NULL || cur->next_fd < 0)
@@ -207,6 +205,7 @@ int
 sys_filesize (uint32_t *esp)
 {
   int fd;
+  int size;
   
   fd = get_arg_int (esp, 1);
 
@@ -218,7 +217,11 @@ sys_filesize (uint32_t *esp)
 	if (file == NULL)
 		exit (-1);
   
-	return file_length (file);
+  lock_acquire (&filesys_lock);
+	size = file_length (file);
+  lock_release (&filesys_lock);
+  
+  return size;
 }
 
 int
