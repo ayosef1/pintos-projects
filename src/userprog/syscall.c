@@ -158,9 +158,18 @@ sys_create (uint32_t *esp)
 }
 
 bool
-sys_remove (uint32_t *esp UNUSED)
+sys_remove (uint32_t *esp)
 {
-  return false;
+  bool ret = false;
+  char *fname = get_arg_fname (esp, 1);
+
+  if (fname != NULL) 
+  {
+    lock_acquire (&filesys_lock);
+    ret = filesys_remove (fname);
+    lock_release (&filesys_lock);
+  }
+  return ret;
 }
 
 int
