@@ -163,7 +163,7 @@ sys_remove (uint32_t *esp)
   bool ret = false;
   char *fname = get_arg_fname (esp, 1);
 
-  if (fname != NULL) 
+  if (fname != NULL)
   {
     lock_acquire (&filesys_lock);
     ret = filesys_remove (fname);
@@ -191,12 +191,12 @@ sys_open (uint32_t *esp)
     return ret;
 
   ret = cur->next_fd;
-  cur->fdtable[ret] = fp;
+  cur->fdtable[ret].fp = fp;
   
   int new_fd = STDOUT_FILENO + 1;
   for (; new_fd < MAX_FILES; new_fd++) 
     {
-      if (cur->fdtable[new_fd] == NULL)
+      if (cur->fdtable[new_fd].fp == NULL)
       {
         cur->next_fd = new_fd;
         break;
@@ -221,7 +221,7 @@ sys_filesize (uint32_t *esp)
   if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
     exit (-1);
   
-  struct file *file = thread_current ()->fdtable[fd];
+  struct file *file = thread_current ()->fdtable[fd].fp;
 
 	if (file == NULL)
 		exit (-1);
@@ -261,7 +261,7 @@ sys_read (uint32_t *esp)
   else
     {
         struct thread *cur = thread_current ();
-        struct file *fp = cur->fdtable[fd];
+        struct file *fp = cur->fdtable[fd].fp;
 
         if (fp == NULL) {
           return -1;
@@ -307,7 +307,7 @@ sys_write (uint32_t *esp)
   else 
   {
     struct thread *cur = thread_current ();
-    struct file *fp = cur->fdtable[fd];
+    struct file *fp = cur->fdtable[fd].fp;
 
     if (fp == NULL) 
       return -1;
@@ -343,7 +343,7 @@ sys_close (uint32_t *esp)
     return;
   
   struct thread *cur = thread_current ();
-  struct file *fp = cur->fdtable[fd];
+  struct file *fp = cur->fdtable[fd].fp;
 
   if (fp == NULL)
     return;
@@ -352,7 +352,7 @@ sys_close (uint32_t *esp)
   file_close (fp);
   lock_release (&filesys_lock);
 
-  cur->fdtable[fd] = NULL;
+  cur->fdtable[fd].fp = NULL;
 
   if (fd < cur->next_fd)
     cur->next_fd = fd;

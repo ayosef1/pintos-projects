@@ -89,6 +89,17 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
+
+#ifdef USERPROG
+/* File Descriptor Table Entry. */
+struct fdtable_entry 
+  {
+    struct file *fp;      /* File opened by thread. */
+    int pos;              /* Position expressed as number of bytes 
+                             from the beginning of the file. */
+  };
+#endif
+
 struct thread
   {
     /* Owned by thread.c. */
@@ -115,14 +126,13 @@ struct thread
     struct list_elem elem;              /* List element. */
 
     struct list locks_held;             /* List of locks held by this thread. */
-    struct lock *waiting_lock;          /* Lock we are waiting for (if any)*/
+    struct lock *waiting_lock;          /* Lock we are waiting for (if any). */
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                 /* Page directory. */
-
-    struct file *fdtable[MAX_FILES];   /* File Descriptor Table*/
-    int next_fd;                       /* Smallest File Descriptor available */
-    int exit_status;
+    uint32_t *pagedir;                          /* Page directory. */
+    struct fdtable_entry fdtable[MAX_FILES];    /* File Descriptor Table. */
+    int next_fd;                                /* Smallest available fd. */
+    int exit_status;                            /* Exit status of thread. */
 #endif
 
     /* Owned by thread.c. */
