@@ -95,8 +95,12 @@ typedef int tid_t;
 struct fdtable_entry 
   {
     struct file *fp;      /* File opened by thread. */
-    int pos;              /* Position expressed as number of bytes 
+    int read_pos;         /* Position in file from which to start
+                             reading expressed as number of bytes 
                              from the beginning of the file. */
+    int write_pos;        /* Position in file from which to start
+                             reading expressed as number of bytes 
+                             from the beginning of the file. */ 
   };
 #endif
 

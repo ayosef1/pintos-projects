@@ -266,10 +266,12 @@ sys_read (uint32_t *esp)
         if (fp == NULL) {
           return -1;
         }
-
+        int pos = cur->fdtable[fd].read_pos;
         lock_acquire (&filesys_lock);
-        bytes_read = file_read(fp, buffer, size);
+        bytes_read = file_read_at(fp, buffer, size, pos);
+        pos += bytes_read;
         lock_release (&filesys_lock);
+        cur->fdtable[fd].read_pos = pos;
     }
   
   return bytes_read;
@@ -312,24 +314,48 @@ sys_write (uint32_t *esp)
     if (fp == NULL) 
       return -1;
 
+    int pos = cur->fdtable[fd].write_pos;
     lock_acquire (&filesys_lock);
-    bytes_written = file_write (fp, buffer, size);
+    bytes_written = file_write_at (fp, buffer, size, pos);
+    pos += bytes_written;
     lock_release (&filesys_lock);
+    cur->fdtable[fd].write_pos = pos;
   }
 
   return bytes_written;
 }
 
 static void
-sys_seek (uint32_t *esp UNUSED)
+sys_seek (uint32_t *esp)
 {
+  int fd;
+  unsigned pos;
+  struct thread *cur;
 
+  fd = get_arg_int (esp, 1);
+  pos = get_arg_int (esp, 2);
+  cur = thread_current ();
+
+  if (!is_valid_fd(fd) || cur->fdtable[fd].fp == NULL)
+    exit (-1);
+  
+  cur->fdtable[fd].read_pos = pos;
+  cur->fdtable[fd].write_pos = pos;
 }
 
 static unsigned
-sys_tell (uint32_t *esp UNUSED)
+sys_tell (uint32_t *esp)
 {
-  return 1;
+  int fd;
+  struct thread *cur;
+
+  fd = get_arg_int (esp, 1);
+  cur = thread_current ();
+
+  if (cur->fdtable[fd].fp == NULL)
+    exit (-1);
+
+  return cur->fdtable[fd].read_pos;
 }
 
 static void
@@ -345,6 +371,7 @@ sys_close (uint32_t *esp)
   struct thread *cur = thread_current ();
   struct file *fp = cur->fdtable[fd].fp;
 
+  /* Have previously closed the given file descriptor. */
   if (fp == NULL)
     return;
   

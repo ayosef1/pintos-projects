@@ -621,7 +621,8 @@ init_thread (struct thread *t, const char *name, int priority)
 
     for (; fd < MAX_FILES; fd++ ) {
       t->fdtable[fd].fp = NULL;
-      t->fdtable[fd].pos = 0;
+      t->fdtable[fd].read_pos = 0;
+      t->fdtable[fd].write_pos = 0;
     }
 
   #endif
