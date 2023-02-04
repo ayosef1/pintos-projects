@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "devices/input.h"
+#include "devices/shutdown.h"
 #include "filesys/directory.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
@@ -117,7 +118,7 @@ exit (int status)
 void
 sys_halt ()
 {
-
+  shutdown_power_off ();
 }
 
 void
@@ -282,7 +283,7 @@ sys_write (uint32_t *esp)
 
   if (!is_valid_fd (fd) || fd == STDIN_FILENO)
     {
-      return -1;
+      bytes_written = -1;
     }
   else if (fd == STDOUT_FILENO)
     {
@@ -306,6 +307,7 @@ sys_write (uint32_t *esp)
     bytes_written = file_write (fp, buffer, size);
     lock_release (&filesys_lock);
   }
+
   return bytes_written;
 }
 
@@ -399,7 +401,7 @@ get_arg_fname (void *esp, int pos)
     }
   
   /* Null indicates that filename
-     was either empty or too long. */
+     is either empty or too long. */
   if (cur == *fname_ptr || cur == end)
     *fname_ptr = NULL;
   
