@@ -380,6 +380,7 @@ sys_seek (uint32_t *esp)
 static unsigned
 sys_tell (uint32_t *esp)
 {
+  unsigned ret;
   int fd;
   struct thread *cur;
 
@@ -389,7 +390,11 @@ sys_tell (uint32_t *esp)
   if (cur->fdtable[fd].fp == NULL)
     exit (-1);
 
-  return cur->fdtable[fd].read_pos;
+  lock_acquire (&filesys_lock);
+  ret = file_tell (cur->fdtable[fd].fp);
+  lock_release (&filesys_lock);
+
+  return ret;
 }
 
 static void
