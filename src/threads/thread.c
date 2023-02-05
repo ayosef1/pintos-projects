@@ -627,6 +627,8 @@ init_thread (struct thread *t, const char *name, int priority)
     lock_init (&t->children_lock);
     sema_init (&t->wait_for_child, 0);
     sema_init (&t->wait_for_parent, 0);
+    sema_init (&t->loaded_sema, 0);
+    t->loaded = false;
 
     if (t != initial_thread)
     {

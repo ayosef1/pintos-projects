@@ -136,28 +136,28 @@ pid_t
 sys_exec (uint32_t *esp)
 {
   char *cmd_line;
-  char *cmd_line_cpy;
-  char *filename;
+  // char *cmd_line_cpy;
+  // char *filename;
 
   cmd_line = get_arg_string (esp, 1, CMD_LINE_MAX);
   if (cmd_line == NULL)
     return TID_ERROR;
   
-  /* Check if file exists. */
-  cmd_line_cpy = palloc_get_page (0);
-  if (cmd_line_cpy == NULL)
-    return TID_ERROR;
-  strlcpy (cmd_line_cpy, cmd_line, PGSIZE);
+  // /* Check if file exists. */
+  // cmd_line_cpy = palloc_get_page (0);
+  // if (cmd_line_cpy == NULL)
+  //   return TID_ERROR;
+  // strlcpy (cmd_line_cpy, cmd_line, PGSIZE);
 
-  char *save_ptr;
-  filename = strtok_r(cmd_line_cpy, " ", &save_ptr);
-  lock_acquire (&filesys_lock);
-  if (filesys_open (filename) == NULL)
-  {
-    lock_release (&filesys_lock);
-    return TID_ERROR;
-  }
-  lock_release (&filesys_lock);
+  // char *save_ptr;
+  // filename = strtok_r(cmd_line_cpy, " ", &save_ptr);
+  // lock_acquire (&filesys_lock);
+  // if (filesys_open (filename) == NULL)
+  // {
+  //   lock_release (&filesys_lock);
+  //   return TID_ERROR;
+  // }
+  // lock_release (&filesys_lock);
   
   return process_execute (cmd_line);
 }

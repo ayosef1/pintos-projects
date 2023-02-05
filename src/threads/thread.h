@@ -145,6 +145,8 @@ struct thread
     struct semaphore wait_for_child;
     struct semaphore wait_for_parent;
 
+    bool loaded;
+    struct semaphore loaded_sema;
 #endif
 
     /* Owned by thread.c. */

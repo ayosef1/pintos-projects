@@ -51,12 +51,35 @@ process_execute (const char *file_name)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (token, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
-  {
-    palloc_free_page (fn_copy);
-    palloc_free_page (command_name); 
-  }
+
+  /* Ugly way of making sure parent waits for child to load. */
+  struct thread *parent = thread_current ();
+  struct thread *target_child = NULL;
+  struct list *children = &parent->children;
+  struct list_elem *e;
+
+  lock_acquire (&parent->children_lock);
+  for (e = list_begin (children); e != list_end (children); e = list_next (e))
+    {
+      struct thread *cur_child;
+
+      cur_child = list_entry (e, struct thread, children_elem);
+      if (cur_child->tid == tid)
+      {
+        target_child = cur_child;
+        break;
+      }
+    }
+  lock_release (&parent->children_lock);
+  sema_down (&target_child->loaded_sema);
   
+  if (tid == TID_ERROR || !target_child->loaded)
+    return TID_ERROR;
+
+  // if (tid == TID_ERROR)
+    // palloc_free_page (fn_copy);
+
+  palloc_free_page (command_name); 
   return tid;
 }
 
@@ -76,10 +99,17 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
+  /* Inform parent of load status. */
+  thread_current ()->loaded = success;
+  sema_up (&thread_current ()->loaded_sema);
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
+  {
+    thread_current ()->exit_status = -1;
     thread_exit ();
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
