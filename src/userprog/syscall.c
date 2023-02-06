@@ -225,12 +225,12 @@ sys_open (uint32_t *esp)
     return ret;
 
   ret = cur->next_fd;
-  cur->fdtable[ret].fp = fp;
+  cur->fdtable[ret] = fp;
   
   int new_fd = STDOUT_FILENO + 1;
   for (; new_fd < MAX_FILES; new_fd++) 
     {
-      if (cur->fdtable[new_fd].fp == NULL)
+      if (cur->fdtable[new_fd] == NULL)
       {
         cur->next_fd = new_fd;
         break;
@@ -255,7 +255,7 @@ sys_filesize (uint32_t *esp)
   if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
     exit (-1);
   
-  struct file *file = thread_current ()->fdtable[fd].fp;
+  struct file *file = thread_current ()->fdtable[fd];
 
 	if (file == NULL)
 		exit (-1);
@@ -295,17 +295,14 @@ sys_read (uint32_t *esp)
   else
     {
         struct thread *cur = thread_current ();
-        struct file *fp = cur->fdtable[fd].fp;
+        struct file *fp = cur->fdtable[fd];
 
         if (fp == NULL) {
           return -1;
         }
-        int pos = cur->fdtable[fd].read_pos;
         lock_acquire (&filesys_lock);
-        bytes_read = file_read_at(fp, buffer, size, pos);
-        pos += bytes_read;
+        bytes_read = file_read(fp, buffer, size);
         lock_release (&filesys_lock);
-        cur->fdtable[fd].read_pos = pos;
     }
   
   return bytes_read;
@@ -343,17 +340,14 @@ sys_write (uint32_t *esp)
   else 
   {
     struct thread *cur = thread_current ();
-    struct file *fp = cur->fdtable[fd].fp;
+    struct file *fp = cur->fdtable[fd];
 
     if (fp == NULL) 
       return -1;
 
-    int pos = cur->fdtable[fd].write_pos;
     lock_acquire (&filesys_lock);
-    bytes_written = file_write_at (fp, buffer, size, pos);
-    pos += bytes_written;
+    bytes_written = file_write(fp, buffer, size);
     lock_release (&filesys_lock);
-    cur->fdtable[fd].write_pos = pos;
   }
 
   return bytes_written;
@@ -370,11 +364,10 @@ sys_seek (uint32_t *esp)
   pos = get_arg_int (esp, 2);
   cur = thread_current ();
 
-  if (!is_valid_fd(fd) || cur->fdtable[fd].fp == NULL)
+  if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
     exit (-1);
   
-  cur->fdtable[fd].read_pos = pos;
-  cur->fdtable[fd].write_pos = pos;
+  file_seek (cur->fdtable[fd], pos);
 }
 
 static unsigned
@@ -387,11 +380,11 @@ sys_tell (uint32_t *esp)
   fd = get_arg_int (esp, 1);
   cur = thread_current ();
 
-  if (cur->fdtable[fd].fp == NULL)
+  if (cur->fdtable[fd] == NULL)
     exit (-1);
 
   lock_acquire (&filesys_lock);
-  ret = file_tell (cur->fdtable[fd].fp);
+  ret = file_tell (cur->fdtable[fd]);
   lock_release (&filesys_lock);
 
   return ret;
@@ -408,7 +401,7 @@ sys_close (uint32_t *esp)
     return;
   
   struct thread *cur = thread_current ();
-  struct file *fp = cur->fdtable[fd].fp;
+  struct file *fp = cur->fdtable[fd];
 
   /* Have previously closed the given file descriptor. */
   if (fp == NULL)
@@ -418,7 +411,7 @@ sys_close (uint32_t *esp)
   file_close (fp);
   lock_release (&filesys_lock);
 
-  cur->fdtable[fd].fp = NULL;
+  cur->fdtable[fd] = NULL;
 
   if (fd < cur->next_fd)
     cur->next_fd = fd;

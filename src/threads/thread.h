@@ -91,20 +91,6 @@ typedef int tid_t;
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
 
-#ifdef USERPROG
-/* File Descriptor Table Entry. */
-struct fdtable_entry 
-  {
-    struct file *fp;      /* File opened by thread. */
-    int read_pos;         /* Position in file from which to start
-                             reading expressed as number of bytes 
-                             from the beginning of the file. */
-    int write_pos;        /* Position in file from which to start
-                             reading expressed as number of bytes 
-                             from the beginning of the file. */ 
-  };
-#endif
-
 struct thread
   {
     /* Owned by thread.c. */
@@ -135,7 +121,7 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                          /* Page directory. */
-    struct fdtable_entry fdtable[MAX_FILES];    /* File Descriptor Table. */
+    struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
     int next_fd;                                /* Smallest available fd. */
     int exit_status;                            /* Exit status of thread. */
     struct list children;                       /* List of child structs. */

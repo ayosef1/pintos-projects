@@ -185,12 +185,10 @@ process_exit (void)
   int i;
   for (i = STDOUT_FILENO + 1; i < MAX_FILES; i++)
     {
-      if (cur->fdtable[i].fp != NULL)
+      if (cur->fdtable[i] != NULL)
       {
-        file_close (cur->fdtable[i].fp);
-        cur->fdtable[i].fp = NULL;
-        cur->fdtable[i].read_pos = 0;
-        cur->fdtable[i].write_pos = 0;
+        file_close (cur->fdtable[i]);
+        cur->fdtable[i] = NULL;
       }
     }
   

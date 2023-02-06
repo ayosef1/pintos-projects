@@ -613,15 +613,13 @@ init_thread (struct thread *t, const char *name, int priority)
     int fd = STDIN_FILENO;
 
     // Set STDIN & STDOUT to invalid ptrs
-    t->fdtable[fd++].fp = THREAD_MAGIC;
-    t->fdtable[fd++].fp = THREAD_MAGIC;
+    t->fdtable[fd++] = THREAD_MAGIC;
+    t->fdtable[fd++] = THREAD_MAGIC;
 
     t->next_fd = fd;
 
     for (; fd < MAX_FILES; fd++ ) {
-      t->fdtable[fd].fp = NULL;
-      t->fdtable[fd].read_pos = 0;
-      t->fdtable[fd].write_pos = 0;
+      t->fdtable[fd] = NULL;
     }
     list_init (&t->children);
     lock_init (&t->children_lock);
