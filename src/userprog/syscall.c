@@ -383,11 +383,7 @@ sys_tell (uint32_t *esp)
   if (cur->fdtable[fd] == NULL)
     exit (-1);
 
-  lock_acquire (&filesys_lock);
-  ret = file_tell (cur->fdtable[fd]);
-  lock_release (&filesys_lock);
-
-  return ret;
+  return file_tell (cur->fdtable[fd]);
 }
 
 static void
