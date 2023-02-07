@@ -53,12 +53,10 @@ process_execute (const char *file_name)
   tid = thread_create (token, PRI_DEFAULT, start_process, fn_copy);
 
   /* Ugly way of making sure parent waits for child to load. */
-  struct thread *parent = thread_current ();
   struct thread *target_child = NULL;
-  struct list *children = &parent->children;
+  struct list *children = &thread_current ()->children;
   struct list_elem *e;
 
-  lock_acquire (&parent->children_lock);
   for (e = list_begin (children); e != list_end (children); e = list_next (e))
     {
       struct thread *cur_child;
@@ -70,10 +68,13 @@ process_execute (const char *file_name)
         break;
       }
     }
-  lock_release (&parent->children_lock);
+  
+  if (!target_child)
+    return TID_ERROR;
+  
   sema_down (&target_child->loaded_sema);
   
-  if (tid == TID_ERROR || !target_child->loaded)
+  if (!target_child->loaded)
     return TID_ERROR;
 
   // if (tid == TID_ERROR)
@@ -134,15 +135,12 @@ int
 process_wait (tid_t child_tid) 
 {
   struct thread *parent;
-  struct thread *target_child;
   struct list *children;
   struct list_elem *e;
 
   parent = thread_current ();
-  target_child = NULL;
   children = &parent->children;
 
-  lock_acquire (&parent->children_lock);
   for (e = list_begin (children); e != list_end (children); e = list_next (e))
     {
       struct thread *cur_child;
@@ -150,24 +148,16 @@ process_wait (tid_t child_tid)
       cur_child = list_entry (e, struct thread, children_elem);
       if (cur_child->tid == child_tid)
       {
-        target_child = cur_child;
-        break;
+        list_remove (&cur_child->children_elem);
+
+        sema_down (&cur_child->wait_for_child);
+        int status = cur_child->exit_status;
+        sema_up (&cur_child->wait_for_parent);
+        return status;
       }
     }
-
-  if (target_child == NULL)
-  {
-    lock_release (&parent->children_lock);
-    return TID_ERROR;
-  }
-  list_remove (&target_child->children_elem);
-  lock_release (&parent->children_lock);
-
-  sema_down (&target_child->wait_for_child);
-  int status = target_child->exit_status;
-  sema_up (&target_child->wait_for_parent);
   
-  return status;
+  return TID_ERROR;
 }
 
 /* Free the current process's resources. */
@@ -178,8 +168,6 @@ process_exit (void)
   uint32_t *pd;
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
-  sema_up (&cur->wait_for_child);
-  sema_down (&cur->wait_for_parent);
 
   /* Close all file descriptors. */
   int i;
@@ -217,6 +205,10 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+  
+  // Signal to parent exited
+  sema_up (&cur->wait_for_child);
+  sema_down (&cur->wait_for_parent);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -575,13 +567,13 @@ setup_stack (void **esp, const char *file_name)
   int argc = 0;
   for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
       token = strtok_r (NULL, " ", &save_ptr))
-  {
-    size_t length = strlen (token) + 1;
-    *esp -= length;
-    strlcpy (*esp, token, length);
-    argv[argc] = *esp;
-    argc++;
-  }
+    {
+      size_t length = strlen (token) + 1;
+      *esp -= length;
+      strlcpy (*esp, token, length);
+      argv[argc] = *esp;
+      argc++;
+    }
 
   palloc_free_page(file_name_copy);
 
