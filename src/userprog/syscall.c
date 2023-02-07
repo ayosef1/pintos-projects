@@ -104,7 +104,7 @@ syscall_handler (struct intr_frame *f)
       sys_close (f->esp);
       break;
     default:
-      exit(-1);
+      exit (-1);
   }
 }
 
@@ -448,7 +448,7 @@ get_arg_string (void *esp, int pos, int limit)
   fname_ptr = (char **)esp + pos;
 
   if (!is_valid_memory (fname_ptr, sizeof (char *)))
-    exit(-1);
+    exit (-1);
 
   end = *fname_ptr + limit + 1;
 
@@ -457,7 +457,7 @@ get_arg_string (void *esp, int pos, int limit)
     {
       if (!is_valid_address (cur) 
           || pagedir_get_page (thread_current ()->pagedir, cur) == NULL)
-        exit(-1);
+        exit (-1);
       
       if (*cur == '\0')
         break;
@@ -478,9 +478,11 @@ is_valid_memory (void *start, unsigned size)
   /* TODO: depending on operation, might need to double check permissions. */
   uint8_t *cur;
   uint8_t *end;
+  unsigned start_offs;
   
   end = (uint8_t *)start + size;
-  unsigned start_offs = pg_ofs(start);
+  start_offs = pg_ofs (start);
+
   for (cur = start - start_offs; cur < end; cur += PGSIZE)
     {
       if (!is_valid_address (cur))
