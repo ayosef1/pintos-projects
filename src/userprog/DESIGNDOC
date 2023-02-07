@@ -224,12 +224,43 @@ that it may terminate and returns the exit status.
 >> loading.  How does your code ensure this?  How is the load
 >> success/failure status passed back to the thread that calls "exec"?
 
+We added a a semaphore `loaded_sema` to struct thread. Each parents when
+making a call to exec (and therefore process_execute) has to wait for the
+child to signal them using this semaphore that they have completed loading.
+Before the child signals the parent, it sets its member `loaded`. Therefore the
+parent can check the `loaded` member once it has been signaled to decided how
+to return from exec.
+
 >> B8: Consider parent process P with child process C.  How do you
 >> ensure proper synchronization and avoid race conditions when P
 >> calls wait(C) before C exits?  After C exits?  How do you ensure
 >> that all resources are freed in each case?  How about when P
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
+
+Case 1 ( wait(C) before C exits):
+In this case, the parent waits to be signaled by the child through the
+`wait_for_child` semaphore. This semaphore is signalled once the child
+completes their cleanup as described in B5. Since it is a semaphore the
+parent is blocking until they receive the signal.
+
+Case 2( wait(C) after C exits ):
+After C signals to the parent in the manner described above, C waits on P
+to signal it back that it has successfully extracted its exit status. This
+is done through the `wait_for_parent` semaphore.
+
+All cleanup is done with a call to thread_exit since every path to a thread
+exiting / terminating go through this path. Thread exit then calls process_exit
+which is reponsible for all cleanup. In process_exit, each thread closes each 
+of the files in its file descriptor table, releases all the locks it currently
+holds (including the filesystem lock) and finally signals each of its 
+children's `wait_for_parent` semaphores. This means in the case that the parent
+exits without waiting, each of the orphaned children can exit freely instead
+of waiting on this semaphore.
+
+If P terminates without waiting, during its cleanup process it signals the
+`wait_for_parent` semaphore, meaning that once an orphaned child exits it will
+not wait for a signal from the parent, it just becomes free to exit.
 
 
 ---- RATIONALE ----
