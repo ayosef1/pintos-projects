@@ -127,19 +127,20 @@ static struct lock filesys_lock;
 
 Members added to struct thread:
 
-    struct file *fdtable[MAX_FILES];            /* File Descriptor Table. */
     int next_fd;                                /* Smallest available fd. */
     int exit_status;                            /* Exit status of thread. */
+    bool loaded;                                /* Thread loaded execultable
+                                                   and stack successfully */
     struct list children;                       /* List of child structs. */
-    struct list_elem children_elem;             /* List element for per thread 
+    struct list_elem children_elem;             /* List element for per thread
                                                    children list */
-             
-    struct semaphore wait_for_child;            
-    struct semaphore exit_status_sema;
+    struct semaphore wait_for_child;
+    struct semaphore wait_for_parent;
 
-    struct semaphore loaded_sema;               /* Synchronization between 
-                                                   child and parent when exec 
+    struct semaphore loaded_sema;               /* Synchronization between
+                                                   child and parent when exec
                                                    called and child loads */
+    struct file *fdtable[MAX_FILES];            /* File Descriptor Table. */
 
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
@@ -181,16 +182,26 @@ We assume that the `file` that is to be written to has been opened already
 and that we consider teh number of inspections of the page table during a
 call to write.
 
-4,096 bytes
+4kB:
 To begin with we inspect that each of the arguments passed to the kernel
-are in valid user space. This means we make 3 checks. We then check that every
-bytes pointed to by the user space buffer is in valid user space. This involves
-checking whether each page 
+are in valid user space. 3 args = 3 checks. We then check that every
+byte in the buffer is in valid user space. Since a page is 4kB, 4kB of user
+data could be on one page (1 check), or two pages (2 checks). Therefore for 4kB
+we minimally inspect the table 4 times and maximally 5 times.
 
-Next we make our call to write. 
+2B:
+The numbers are identical for 2B. The same number of checks need to happen 
+for the three arguments and 2B of data can also be in one page or two pages.
+Therefore for 4kB we minimally inspect the table 4 times and maximally 5 times. 
 
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
+
+The wait system call, iterates through the running proccess' children and if
+it finds a child that has the correct TID, removes the child from its waiting
+list and waits for the child to signal that it has completed its exit cleanp.
+The parent process then collects the child's exit status, signals to the child
+that it may terminate and returns the exit status.
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -219,6 +230,7 @@ Next we make our call to write.
 >> that all resources are freed in each case?  How about when P
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
+
 
 ---- RATIONALE ----
 
