@@ -418,6 +418,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
+  palloc_free_page (file_name_copy);
   file_close (file);
   return success;
 }
@@ -539,7 +540,6 @@ setup_stack (void **esp, const char *file_name)
   bool success = false;
 
   // 64-bit so we don't assume word length
-
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
