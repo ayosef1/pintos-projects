@@ -169,6 +169,9 @@ process_exit (void)
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
 
+  if (cur->executable != NULL)
+    file_close (cur->executable);
+
   /* Close all file descriptors. */
   int i;
   for (i = STDOUT_FILENO + 1; i < MAX_FILES; i++)
@@ -336,6 +339,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       goto done; 
     }
 
+  file_deny_write (file);
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -421,7 +425,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* We arrive here whether the load is successful or not. */
   if (file_name_copy != NULL)
     palloc_free_page (file_name_copy);
-  file_close (file);
+  thread_current ()->executable = file;
+  // file_close (file);
   return success;
 }
 

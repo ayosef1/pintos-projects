@@ -138,6 +138,8 @@ struct thread
                                                    child and parent when exec
                                                    called and child loads */
    struct file *fdtable[MAX_FILES];            /* File Descriptor Table. */
+
+   struct file *executable;
 #endif
 
     /* Owned by thread.c. */
