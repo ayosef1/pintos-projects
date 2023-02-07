@@ -124,20 +124,20 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                          /* Page directory. */
-    struct file *fdtable[MAX_FILES];            /* File Descriptor Table. */
     int next_fd;                                /* Smallest available fd. */
     int exit_status;                            /* Exit status of thread. */
+    bool loaded;                                /* Thread loaded execultable
+                                                   and stack successfully */
     struct list children;                       /* List of child structs. */
     struct list_elem children_elem;             /* List element for per thread
                                                    children list */
     struct semaphore wait_for_child;
     struct semaphore wait_for_parent;
 
-    bool loaded;                                /* Outcome of user thread stack
-                                                   setup and execultable load */
     struct semaphore loaded_sema;               /* Synchronization between
                                                    child and parent when exec
                                                    called and child loads */
+   struct file *fdtable[MAX_FILES];            /* File Descriptor Table. */
 #endif
 
     /* Owned by thread.c. */
