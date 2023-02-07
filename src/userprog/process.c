@@ -188,6 +188,14 @@ process_exit (void)
       struct lock *l = list_entry (e, struct lock, locks_held_elem);
       lock_release (l);
     }
+  
+  
+  for (e = list_begin (&cur->children); e != list_end (&cur->children);
+       e = list_next (e))
+    {
+      struct thread *child = list_entry (e, struct thread, children_elem);
+      sema_up (&child->wait_for_child);
+    }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
