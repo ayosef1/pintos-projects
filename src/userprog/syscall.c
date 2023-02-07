@@ -15,8 +15,6 @@
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 
-#define CMD_LINE_MAX 128
-
 static void syscall_handler (struct intr_frame *);
 
 static void sys_halt (void);
@@ -43,7 +41,10 @@ static bool is_valid_memory (void *buffer, unsigned size);
 static bool is_valid_address (const void *uaddr);
 static bool is_valid_fd (int fd);
 
+/* Coarse grain lock for filesystem access */
 static struct lock filesys_lock;
+
+#define CMD_LINE_MAX 128        /* Maximum number of command line characters */
 
 void
 syscall_init (void) 
@@ -373,7 +374,6 @@ sys_seek (uint32_t *esp)
 static unsigned
 sys_tell (uint32_t *esp)
 {
-  unsigned ret;
   int fd;
   struct thread *cur;
 
@@ -419,7 +419,7 @@ get_arg_int (void *esp, int pos)
 {
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
-  if (!is_valid_memory (arg, sizeof (int)))
+  if (!is_valid_address (arg))
     exit (-1);
 
   return *(int *)arg;
@@ -480,19 +480,22 @@ is_valid_memory (void *start, unsigned size)
   uint8_t *end;
   
   end = (uint8_t *)start + size;
-  for (cur = start; cur < end; cur++)
+  unsigned start_offs = pg_ofs(start);
+  for (cur = start - start_offs; cur < end; cur += PGSIZE)
     {
-      if (!is_valid_address (cur) 
-          || pagedir_get_page (thread_current ()->pagedir, cur) == NULL)
+      if (!is_valid_address (cur))
         return false;
     }
   return true;
 }
 
+/* Returns whether VADDR is a valid memory address. This means it is
+   in user space and has been allocated in the page table */
 static bool 
 is_valid_address (const void *vaddr)
 {
-  return vaddr != NULL && is_user_vaddr (vaddr);
+  return vaddr != NULL && is_user_vaddr (vaddr)
+                       && pagedir_get_page (thread_current ()->pagedir, vaddr);
 }
 
 static bool
