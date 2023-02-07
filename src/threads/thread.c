@@ -622,7 +622,6 @@ init_thread (struct thread *t, const char *name, int priority)
       t->fdtable[fd] = NULL;
     }
     list_init (&t->children);
-    lock_init (&t->children_lock);
     sema_init (&t->wait_for_child, 0);
     sema_init (&t->wait_for_parent, 0);
     sema_init (&t->loaded_sema, 0);
@@ -630,9 +629,7 @@ init_thread (struct thread *t, const char *name, int priority)
 
     if (t != initial_thread)
     {
-      lock_acquire (&thread_current ()->children_lock);
       list_push_back (&thread_current ()->children, &t->children_elem);
-      lock_release (&thread_current ()->children_lock);
     }
   #endif
 

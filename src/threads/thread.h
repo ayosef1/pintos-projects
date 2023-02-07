@@ -130,8 +130,6 @@ struct thread
     struct list children;                       /* List of child structs. */
     struct list_elem children_elem;             /* List element for per thread
                                                    children list */
-    struct lock children_lock;                  /* Lock to access children
-                                                   list */
     struct semaphore wait_for_child;
     struct semaphore wait_for_parent;
 
