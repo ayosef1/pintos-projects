@@ -306,6 +306,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
+  char *file_name_copy = NULL;
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
@@ -321,7 +322,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   /* Open executable file. */
   char *token, *save_ptr;
-  char *file_name_copy = palloc_get_page (0);
+  file_name_copy = palloc_get_page (0);
   if (file_name_copy == NULL)
     goto done;
 
@@ -418,7 +419,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  palloc_free_page (file_name_copy);
+  if (file_name_copy != NULL)
+    palloc_free_page (file_name_copy);
   file_close (file);
   return success;
 }
