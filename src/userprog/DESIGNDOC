@@ -30,7 +30,7 @@ Gordon Martinez-Piedra <martigp@stanford.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
-/* Size of word used frequently when pushing to stack*/
+/* Size of word used frequently when pushing to stack */
 #define WORD_SIZE sizeof (void *)
 
 ---- ALGORITHMS ----
@@ -114,14 +114,61 @@ that use system calls, rather than base kernel functionalities).
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+#define MAX_FILES 128           /* Size of the file descriptor table and 
+                                   therefore limit on number of files a process
+                                   can open */
+
+#define CMD_LINE_MAX 128        /* Maximum number of command line characters */
+
+typedef int pid_t;              /* Process id number */
+
+/* Coarse grain lock for filesystem access */
+static struct lock filesys_lock;
+
+Members added to struct thread:
+
+    struct file *fdtable[MAX_FILES];            /* File Descriptor Table. */
+    int next_fd;                                /* Smallest available fd. */
+    int exit_status;                            /* Exit status of thread. */
+    struct list children;                       /* List of child structs. */
+    struct list_elem children_elem;             /* List element for per thread 
+                                                   children list */
+             
+    struct semaphore wait_for_child;            
+    struct semaphore exit_status_sema;
+
+    struct semaphore loaded_sema;               /* Synchronization between 
+                                                   child and parent when exec 
+                                                   called and child loads */
+
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
+
+File descriptors are unique within a single process. When a call is made
+to open a file, the process allocates a file descriptor to the file.
+Allocation happens by choosing the lowest unused file descriptor by that
+process. Note that fds 0 and 1 are reserved and so will never be returned
+by a call to open. When a process closes a file, the assocaited file descriptor
+is free to be used again.
 
 ---- ALGORITHMS ----
 
 >> B3: Describe your code for reading and writing user data from the
 >> kernel.
+
+Our code begins by validating each of the arguments passed to read and write
+sys calls following the first method as described by the spec. If validation 
+fails, it immediately returns -1.
+
+Otherwise, if the filedescriptor is STDIN or STDOUT, 
+for read and write respectively, it reads from / writes to the shell,
+returning only when successfully completing the entire read / write.
+
+Otherwise, it gets the relevant file pointer from the thread's file descriptor
+table, acquires the filesystem lock and performs the relevant action with the
+relevant filesys call. Once complete, it releases the filesystem lock and
+returns bytes read / written.
 
 >> B4: Suppose a system call causes a full page (4,096 bytes) of data
 >> to be copied from user space into the kernel.  What is the least
@@ -129,6 +176,18 @@ that use system calls, rather than base kernel functionalities).
 >> (e.g. calls to pagedir_get_page()) that might result?  What about
 >> for a system call that only copies 2 bytes of data?  Is there room
 >> for improvement in these numbers, and how much?
+
+We assume that the `file` that is to be written to has been opened already
+and that we consider teh number of inspections of the page table during a
+call to write.
+
+4,096 bytes
+To begin with we inspect that each of the arguments passed to the kernel
+are in valid user space. This means we make 3 checks. We then check that every
+bytes pointed to by the user space buffer is in valid user space. This involves
+checking whether each page 
+
+Next we make our call to write. 
 
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
