@@ -33,7 +33,10 @@ typedef int tid_t;
 
 #define RECENT_CPU_TIME_INITIAL 0       /* Initial thread's recent cpu time. */
 
+/* Size of the file descriptor table and therefore limit on
+   number of files a process can open */
 #define MAX_FILES 128
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -121,18 +124,22 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                          /* Page directory. */
-    struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
+    struct file *fdtable[MAX_FILES];            /* File Descriptor Table. */
     int next_fd;                                /* Smallest available fd. */
     int exit_status;                            /* Exit status of thread. */
     struct list children;                       /* List of child structs. */
-    struct list_elem children_elem;
-    struct lock children_lock;
-             
+    struct list_elem children_elem;             /* List element for per thread
+                                                   children list */
+    struct lock children_lock;                  /* Lock to access children
+                                                   list */
     struct semaphore wait_for_child;
     struct semaphore wait_for_parent;
 
-    bool loaded;
-    struct semaphore loaded_sema;
+    bool loaded;                                /* Outcome of user thread stack
+                                                   setup and execultable load */
+    struct semaphore loaded_sema;               /* Synchronization between
+                                                   child and parent when exec
+                                                   called and child loads */
 #endif
 
     /* Owned by thread.c. */
