@@ -9,6 +9,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -340,14 +341,17 @@ load (const char *file_name, void (**eip) (void), void **esp)
   strlcpy (file_name_copy, file_name, PGSIZE);
   
   token = strtok_r (file_name_copy, " ", &save_ptr);
+
+  lock_acquire(&filesys_lock);
   file = filesys_open (token);
+
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", token);
-      goto done; 
+      goto done;
     }
 
-  file_deny_write (file);
+
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -428,13 +432,15 @@ load (const char *file_name, void (**eip) (void), void **esp)
   *eip = (void (*) (void)) ehdr.e_entry;
 
   success = true;
+  file_deny_write (file);
 
  done:
   /* We arrive here whether the load is successful or not. */
+  lock_release (&filesys_lock);
   if (file_name_copy != NULL)
     palloc_free_page (file_name_copy);
+  
   thread_current ()->executable = file;
-  // file_close (file);
   return success;
 }
 
@@ -566,7 +572,7 @@ setup_stack (void **esp, const char *file_name)
     }
 
   // uint64_t to make sure works for all address lengths
-  uint64_t start_height = (uint64_t) *esp;
+  void * start_height = *esp;
 
   char *token, *save_ptr;
   char *file_name_copy = palloc_get_page (0);
@@ -594,10 +600,10 @@ setup_stack (void **esp, const char *file_name)
 
   int padding = (size_t) *esp % WORD_SIZE;
 
-    // Calculate if will overflow 1 page
-    // Magic 12 is bytes needed for argc, argv and ret address
-    // 3 * WORD_SIZE
-  uint64_t stack_bytes_needed = (start_height - (uint64_t) *esp) +
+  /* Calculate if will overflow 1 page
+      Magic 12 is bytes needed for argc, argv and ret address
+      3 * WORD_SIZE */
+  uint32_t stack_bytes_needed = (start_height - *esp) +
                                 (WORD_SIZE * argc) + 12 + padding;
   
   if (stack_bytes_needed > PGSIZE)
