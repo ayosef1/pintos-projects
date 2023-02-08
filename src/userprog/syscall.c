@@ -41,9 +41,6 @@ static bool is_valid_memory (void *buffer, unsigned size);
 static bool is_valid_address (const void *uaddr);
 static bool is_valid_fd (int fd);
 
-/* Coarse grain lock for filesystem access */
-struct lock filesys_lock;
-
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
 
 void
@@ -291,7 +288,7 @@ sys_read (uint32_t *esp)
   return bytes_read;
 }
 
-#define BUF_MAX 512;
+#define BUF_MAX 512;            /* Max bytes to write to console in one call */
 
 static int
 sys_write (uint32_t *esp)
@@ -423,22 +420,21 @@ get_arg_buffer (void *esp, int pos, int size)
 static char *
 get_arg_string (void *esp, int pos, int limit)
 {
-  char **fname_ptr;
+  char **str_ptr;
   char *cur;
   char *end;
 
-  fname_ptr = (char **)esp + pos;
+  str_ptr = (char **)esp + pos;
 
-  if (!is_valid_memory (fname_ptr, sizeof (char *)))
+  if (!is_valid_memory (str_ptr, sizeof (char *)))
     exit (-1);
 
-  end = *fname_ptr + limit + 1;
+  end = *str_ptr + limit + 1;
 
   
-  for (cur = *fname_ptr; cur < end; cur++)
+  for (cur = *str_ptr; cur < end; cur++)
     {
-      if (!is_valid_address (cur) 
-          || pagedir_get_page (thread_current ()->pagedir, cur) == NULL)
+      if (!is_valid_address (cur))
         exit (-1);
       
       if (*cur == '\0')
@@ -448,10 +444,10 @@ get_arg_string (void *esp, int pos, int limit)
   
   /* Null indicates that filename
      is either empty or too long. */
-  if (cur == *fname_ptr || cur == end)
-    *fname_ptr = NULL;
+  if (cur == *str_ptr || cur == end)
+    *str_ptr = NULL;
   
-  return *fname_ptr;
+  return *str_ptr;
 }
 
 static bool 
