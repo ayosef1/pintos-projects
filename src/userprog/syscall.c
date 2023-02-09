@@ -38,7 +38,7 @@ static void *get_arg_buffer (void *esp, int pos, int size);
 static int get_arg_int (void *esp, int pos);
 
 static bool is_valid_memory (void *buffer, unsigned size);
-static bool is_valid_address (const void *uaddr);
+static bool is_valid_address (void *uaddr);
 static bool is_valid_fd (int fd);
 
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
@@ -485,7 +485,7 @@ is_valid_memory (void *start, unsigned size)
 /* Returns whether VADDR is a valid memory address. This means it is
    in user space and has been allocated in the page table */
 static bool 
-is_valid_address (const void *vaddr)
+is_valid_address (void *vaddr)
 {
   return vaddr != NULL && is_user_vaddr (vaddr)
                        && pagedir_get_page (thread_current ()->pagedir, vaddr);
