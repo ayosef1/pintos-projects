@@ -36,9 +36,10 @@ typedef int tid_t;
 /* Size of the file descriptor table and therefore limit on
    number of files a process can open */
 #define MAX_FILES 128
-/* Reserved File descriptor should never allocate */
+
+/* Reserved file descriptor should never allocate */
 #define RESERVED_FD 0
-/* Reserved File descriptor for process executable */
+/* Reserved file descriptor for process executable */
 #define EXEC_FD 1
 
 /* A kernel thread or user process.
