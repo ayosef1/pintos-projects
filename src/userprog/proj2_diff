@@ -1,0 +1,1461 @@
+diff --git a/src/.gitignore b/src/.gitignore
+index 0ab34c0..b2d9c2e 100644
+--- a/src/.gitignore
++++ b/src/.gitignore
+@@ -2,3 +2,4 @@ cscope.files
+ cscope.out
+ TAGS
+ tags
++.vscode
+\ No newline at end of file
+diff --git a/src/examples/.gitignore b/src/examples/.gitignore
+index a9e09d7..d5a1a73 100644
+--- a/src/examples/.gitignore
++++ b/src/examples/.gitignore
+@@ -17,3 +17,5 @@ lineup
+ matmult
+ recursor
+ *.d
++*.o
++*.a
+diff --git a/src/threads/GRADE b/src/threads/GRADE
+new file mode 100644
+index 0000000..331c4e5
+--- /dev/null
++++ b/src/threads/GRADE
+@@ -0,0 +1,75 @@
++cd build && make grade
++make[1]: Entering directory '/afs/ir.stanford.edu/users/a/d/admensah/CS212/pintos/src/threads/build'
++../../tests/make-grade ../.. results ../../tests/threads/Grading | tee grade
++TOTAL TESTING SCORE: 100.0%
++ALL TESTED PASSED -- PERFECT SCORE
++
++- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
++
++SUMMARY BY TEST SET
++
++Test Set                                      Pts Max  % Ttl  % Max
++--------------------------------------------- --- --- ------ ------
++tests/threads/Rubric.alarm                     18/ 18  20.0%/ 20.0%
++tests/threads/Rubric.priority                  38/ 38  40.0%/ 40.0%
++tests/threads/Rubric.mlfqs                     37/ 37  40.0%/ 40.0%
++--------------------------------------------- --- --- ------ ------
++Total                                                 100.0%/100.0%
++
++- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
++
++SUMMARY OF INDIVIDUAL TESTS
++
++Functionality and robustness of alarm clock (tests/threads/Rubric.alarm):
++	     4/ 4 tests/threads/alarm-single
++	     4/ 4 tests/threads/alarm-multiple
++	     4/ 4 tests/threads/alarm-simultaneous
++	     4/ 4 tests/threads/alarm-priority
++
++	     1/ 1 tests/threads/alarm-zero
++	     1/ 1 tests/threads/alarm-negative
++
++	- Section summary.
++	      6/  6 tests passed
++	     18/ 18 points subtotal
++
++Functionality of priority scheduler (tests/threads/Rubric.priority):
++	     3/ 3 tests/threads/priority-change
++	     3/ 3 tests/threads/priority-preempt
++
++	     3/ 3 tests/threads/priority-fifo
++	     3/ 3 tests/threads/priority-sema
++	     3/ 3 tests/threads/priority-condvar
++
++	     3/ 3 tests/threads/priority-donate-one
++	     3/ 3 tests/threads/priority-donate-multiple
++	     3/ 3 tests/threads/priority-donate-multiple2
++	     3/ 3 tests/threads/priority-donate-nest
++	     5/ 5 tests/threads/priority-donate-chain
++	     3/ 3 tests/threads/priority-donate-sema
++	     3/ 3 tests/threads/priority-donate-lower
++
++	- Section summary.
++	     12/ 12 tests passed
++	     38/ 38 points subtotal
++
++Functionality of advanced scheduler (tests/threads/Rubric.mlfqs):
++	     5/ 5 tests/threads/mlfqs-load-1
++	     5/ 5 tests/threads/mlfqs-load-60
++	     3/ 3 tests/threads/mlfqs-load-avg
++
++	     5/ 5 tests/threads/mlfqs-recent-1
++
++	     5/ 5 tests/threads/mlfqs-fair-2
++	     3/ 3 tests/threads/mlfqs-fair-20
++
++	     4/ 4 tests/threads/mlfqs-nice-2
++	     2/ 2 tests/threads/mlfqs-nice-10
++
++	     5/ 5 tests/threads/mlfqs-block
++
++	- Section summary.
++	      9/  9 tests passed
++	     37/ 37 points subtotal
++
++make[1]: Leaving directory '/afs/ir.stanford.edu/users/a/d/admensah/CS212/pintos/src/threads/build'
+diff --git a/src/threads/thread.c b/src/threads/thread.c
+index fb63cf3..4b1bd31 100644
+--- a/src/threads/thread.c
++++ b/src/threads/thread.c
+@@ -249,7 +249,6 @@ thread_create (const char *name, int priority,
+   sf->eip = switch_entry;
+   sf->ebp = 0;
+ 
+-
+   /* Add to run queue. */
+   thread_unblock (t);
+ 
+@@ -333,6 +332,8 @@ thread_tid (void)
+ void
+ thread_exit (void) 
+ {
++  struct thread *cur = thread_current ();
++
+   ASSERT (!intr_context ());
+ 
+ #ifdef USERPROG
+@@ -344,7 +345,7 @@ thread_exit (void)
+      when it calls thread_schedule_tail(). */
+   intr_disable ();
+   list_remove (&thread_current()->allelem);
+-  thread_current ()->status = THREAD_DYING;
++  cur->status = THREAD_DYING;
+   schedule ();
+   NOT_REACHED ();
+ }
+@@ -607,6 +608,24 @@ init_thread (struct thread *t, const char *name, int priority)
+       }
+   }
+ 
++  #ifdef USERPROG
++    /* Set all pointers to NULL */
++    memset (t->fdtable, 0, sizeof (*t->fdtable));
++    /* Set fd = 0 to invalid ptr */
++    t->fdtable[RESERVED_FD] = THREAD_MAGIC;
++    /* First two FDs reserved */
++    t->next_fd = EXEC_FD + 1;
++      
++    list_init (&t->children);
++    sema_init (&t->exit_status_ready, 0);
++    sema_init (&t->exit_status_received, 0);
++    sema_init (&t->loaded_sema, 0);
++    t->loaded = false;
++
++    if (t != initial_thread)
++      list_push_back (&thread_current ()->children, &t->children_elem);
++  #endif
++
+   /* Initialize the list of locks held by current list*/
+   list_init (&t->locks_held);
+ 
+@@ -767,8 +786,8 @@ thread_max_waiting_priority (struct thread * cur)
+                           &lock_owned_by_current_thread->semaphore.waiters, 
+                           thread_compare_priority, NULL), struct thread, elem);
+           
+-          new_priority = ((new_priority) > (highest_priority_waiter->priority) ? 
+-                            (new_priority) : (highest_priority_waiter->priority));
++          new_priority = (new_priority) > (highest_priority_waiter->priority) ? 
++                          (new_priority) : (highest_priority_waiter->priority);
+         }
+     }
+   return new_priority;
+@@ -899,7 +918,8 @@ update_mlfqs_priority (struct thread *t, void *aux UNUSED)
+       unbounded_priority = int_to_fp (PRI_MAX);
+       unbounded_priority = fp_sub (unbounded_priority,
+                                   div_fp_by_int (t->recent_cpu_time, 4));
+-      unbounded_priority = sub_int_from_fp (unbounded_priority, t->niceness * 2);
++      unbounded_priority = sub_int_from_fp (unbounded_priority, 
++                                            t->niceness * 2);
+       t->priority = bound (fp_to_int (unbounded_priority),
+                           PRI_MIN, PRI_MAX);
+ 
+diff --git a/src/threads/thread.h b/src/threads/thread.h
+index b19ae89..1e7fd4e 100644
+--- a/src/threads/thread.h
++++ b/src/threads/thread.h
+@@ -5,6 +5,7 @@
+ #include <list.h>
+ #include <stdint.h>
+ #include "threads/fixed-point.h"
++#include "threads/synch.h"
+ 
+ 
+ /* States in a thread's life cycle. */
+@@ -32,6 +33,13 @@ typedef int tid_t;
+ 
+ #define RECENT_CPU_TIME_INITIAL 0       /* Initial thread's recent cpu time. */
+ 
++/* Size of the file descriptor table and therefore limit on
++   number of files a process can open */
++#define MAX_FILES 128
++/* Reserved File descriptor should never allocate */
++#define RESERVED_FD 0
++/* Reserved File descriptor for process executable */
++#define EXEC_FD 1
+ 
+ /* A kernel thread or user process.
+ 
+@@ -89,6 +97,7 @@ typedef int tid_t;
+    only because they are mutually exclusive: only a thread in the
+    ready state is on the run queue, whereas only a thread in the
+    blocked state is on a semaphore wait list. */
++
+ struct thread
+   {
+     /* Owned by thread.c. */
+@@ -115,10 +124,26 @@ struct thread
+     struct list_elem elem;              /* List element. */
+ 
+     struct list locks_held;             /* List of locks held by this thread. */
+-    struct lock *waiting_lock;          /* Lock we are waiting for (if any)*/
++    struct lock *waiting_lock;          /* Lock we are waiting for (if any). */
+ #ifdef USERPROG
+     /* Owned by userprog/process.c. */
+-    uint32_t *pagedir;                  /* Page directory. */
++    uint32_t *pagedir;                          /* Page directory. */
++    int next_fd;                                /* Smallest available fd. */
++    int exit_status;                            /* Exit status of thread. */
++    bool loaded;                                /* Thread loaded executable
++                                                   and stack successfully */
++    struct list children;                       /* List of child structs. */
++    struct list_elem children_elem;             /* List element for per thread
++                                                   children list */
++    struct semaphore exit_status_ready;         /* Sync for waiting parent to
++                                                   get exit status of child */
++    struct semaphore exit_status_received;      /* Sync for child to exit after
++                                                   parent gets exit status */
++
++    struct semaphore loaded_sema;               /* Sync for child loading and
++                                                   returning child tid from
++                                                   exec syscall */
++   struct file *fdtable[MAX_FILES];             /* File Descriptor Table. */
+ #endif
+ 
+     /* Owned by thread.c. */
+@@ -171,4 +196,5 @@ int thread_max_waiting_priority (struct thread *);
+ bool thread_compare_priority (const struct list_elem *a,
+                           const struct list_elem *b,
+                           void *aux UNUSED);
++
+ #endif /* threads/thread.h */
+diff --git a/src/userprog/.gitignore b/src/userprog/.gitignore
+index 6d5357c..e467635 100644
+--- a/src/userprog/.gitignore
++++ b/src/userprog/.gitignore
+@@ -1,3 +1,4 @@
+ build
+ bochsrc.txt
+ bochsout.txt
++proj2_diff
+diff --git a/src/userprog/DESIGNDOC b/src/userprog/DESIGNDOC
+new file mode 100644
+index 0000000..762a3bf
+--- /dev/null
++++ b/src/userprog/DESIGNDOC
+@@ -0,0 +1,302 @@
++             +--------------------------+
++             |          CS 212          |
++             | PROJECT 2: USER PROGRAMS |
++             |     DESIGN DOCUMENT      |
++             +--------------------------+
++
++---- GROUP ----
++
++>> Fill in the names and email addresses of your group members.
++
++Abraham Yosef <ayosef@stanford.edu>
++Anthony Mensah <admensah@stanford.edu>
++Gordon Martinez-Piedra <martigp@stanford.edu>
++
++---- PRELIMINARIES ----
++
++>> If you have any preliminary comments on your submission, notes for the
++>> TAs, or extra credit, please give them here.
++
++>> Please cite any offline or online sources you consulted while
++>> preparing your submission, other than the Pintos documentation, course
++>> text, lecture notes, and course staff.
++
++               ARGUMENT PASSING
++               ================
++
++---- DATA STRUCTURES ----
++
++>> A1: Copy here the declaration of each new or changed `struct' or
++>> `struct' member, global or static variable, `typedef', or
++>> enumeration.  Identify the purpose of each in 25 words or less.
++
++/* Size of word used frequently when pushing to stack */
++#define WORD_SIZE sizeof (void *)
++
++---- ALGORITHMS ----
++
++>> A2: Briefly describe how you implemented argument parsing.  How do
++>> you arrange for the elements of argv[] to be in the right order?
++>> How do you avoid overflowing the stack page?
++
++The only difference from argument passing style of 80x86 described in
++Section 3.5 of the Pintos reference is that we order the tokenized
++literals in the opposite direction. This means we push words of
++the command in left to right order (whereas 3.5 does it in right to left).
++
++We implement this by tokenizing and pushing each word of the command onto
++the stack, each time incrementing our argument counter. In order to tokenize
++we first allocate a page to have an copyable version of the command string.
++Similarly, we allocate a page to store the addresses of each word of the 
++command pushed to the stack. The order of the addresses in this page are the
++same as the order that they are pushed.
++
++Next, we add the padding by looking at the current stack addres and rounding
++down to the nearest word size (4 for our 32-bit x86 simulators). We then copy
++each of the addresses of the arguments from the page we allocated onto the
++stack. To do this in the correct order, we start from the last address we
++added to the page of addresses, and iterate backwards (using the stored number
++of arguments to do so). 
++
++Finally we push argv, argc and the null return address.
++
++Since we know that the command line length is not greater than a page itself,
++once we have pushed all the arguments to the page, we then know how much more
++space will have to be allocated (4 bytes for each argument, 12 bytes for return
++argv, argcc and then however many padding bytes). If total bytes is greater
++than the number of pages then we return false.
++
++---- RATIONALE ----
++
++>> A3: Why does Pintos implement strtok_r() but not strtok()?
++
++The difference betwen strtok and strtok_r () is how the remaining string is
++stored. strtok () reads up to the first instance of a delimiter and stores
++the remainder of the string in a static buffer. strtok_r() on the other hand
++requires you to provide a SAVE_PTR which is set to point at remaining part of
++the string after the next delimiter.
++
++The reason that Pintos implements strtok_r() is because it provides the same
++functionality as strtok () but has thread safety. If multiple threads are using
++strtok, there is a data race on the static buffer, as all the threads use
++this to reference the remainder of the string that hasn't been parsed.
++
++
++>> A4: In Pintos, the kernel separates commands into a executable name
++>> and arguments.  In Unix-like systems, the shell does this
++>> separation.  Identify at least two advantages of the Unix approach.
++
++The first advantage is security. String operations are famously unsafe and
++can cause undefined behaviour. Performing the string operations involved in
++command tokenization to an application (the shell) rather than in the kernel
++mitigates and isolates the damage from any vulnerabilities in tokenization as
++well as protecting the critical infrastructure that is the kernel.
++
++The second advantage is a better abstraction of the kernel. The kernel is a
++low level interface with the hardware that abstracts the difficulty of doing
++so away from the applications. The shell on the other hand is an application,
++one layer of abstraction above the kernel. The tokenization of a command, which
++is directly passed to the shell therefore is much more alligned with the layer
++of abstraction that the shell provides. Once a verified command has been parsed
++then it makes sense to pass to the kernel to execute the command.
++
++A third advantage is that it allows for the simplification of the kernel.
++Having the shell parse the command allows the shell to perform the first
++steps for functionalities such as redirection and pipelining (applications
++that use system calls, rather than base kernel functionalities).
++
++                 SYSTEM CALLS
++                 ============
++
++---- DATA STRUCTURES ----
++
++>> B1: Copy here the declaration of each new or changed `struct' or
++>> `struct' member, global or static variable, `typedef', or
++>> enumeration.  Identify the purpose of each in 25 words or less.
++
++#define MAX_FILES 128;          /* Size of the file descriptor table and 
++                                   therefore limit on number of files a process
++                                   can open */
++
++#define CMD_LINE_MAX 128;       /* Maximum number of command line characters */
++#define BUF_MAX 512;            /* Max bytes to write to console in one call */
++
++typedef int pid_t;              /* Process id number */
++
++/* Coarse grain lock for filesystem access */
++static struct lock filesys_lock;
++
++Members added to struct thread:
++
++    int next_fd;                                /* Smallest available fd. */
++    int exit_status;                            /* Exit status of thread. */
++    bool loaded;                                /* Thread loaded execultable
++                                                   and stack successfully */
++    struct list children;                       /* List of child structs. */
++    struct list_elem children_elem;             /* List element for per thread
++                                                   children list */
++    struct semaphore wait_for_child;
++    struct semaphore wait_for_parent;
++
++    struct semaphore loaded_sema;               /* Synchronization between
++                                                   child and parent when exec
++                                                   called and child loads */
++    struct file *fdtable[MAX_FILES];            /* File Descriptor Table. */
++
++>> B2: Describe how file descriptors are associated with open files.
++>> Are file descriptors unique within the entire OS or just within a
++>> single process?
++
++File descriptors are unique within a single process. When a call is made
++to open a file, the process allocates a file descriptor to the file.
++Allocation happens by choosing the lowest unused file descriptor by that
++process. Note that fds 0 and 1 are reserved and so will never be returned
++by a call to open. When a process closes a file, the assocaited file descriptor
++is free to be used again.
++
++---- ALGORITHMS ----
++
++>> B3: Describe your code for reading and writing user data from the
++>> kernel.
++
++Our code begins by validating each of the arguments passed to read and write
++sys calls following the first method as described by the spec. If validation 
++fails, it immediately returns -1.
++
++Otherwise, if the filedescriptor is STDIN or STDOUT, 
++for read and write respectively, it reads from / writes to the shell,
++returning only when successfully completing the entire read / write.
++
++Otherwise, it gets the relevant file pointer from the thread's file descriptor
++table, acquires the filesystem lock and performs the relevant action with the
++relevant filesys call. Once complete, it releases the filesystem lock and
++returns bytes read / written.
++
++>> B4: Suppose a system call causes a full page (4,096 bytes) of data
++>> to be copied from user space into the kernel.  What is the least
++>> and the greatest possible number of inspections of the page table
++>> (e.g. calls to pagedir_get_page()) that might result?  What about
++>> for a system call that only copies 2 bytes of data?  Is there room
++>> for improvement in these numbers, and how much?
++
++We assume that the `file` that is to be written to has been opened already
++and that we consider teh number of inspections of the page table during a
++call to write.
++
++4kB:
++To begin with we inspect that each of the arguments passed to the kernel
++are in valid user space. 3 args = 3 checks. We then check that every
++byte in the buffer is in valid user space. We do this by making sure that each
++page that the buffer exits on it designated to that user.
++Since a page is 4kB, 4kB of user data could be on one page (1 check), or two
++pages (2 checks). Therefore for 4kB we minimally inspect the table 4 times and
++maximally 5 times.
++
++2B:
++The numbers are identical for 2B. The same number of checks need to happen 
++for the three arguments and 2B of data can also be in one page or two pages.
++Therefore for 4kB we minimally inspect the table 4 times and maximally 5 times. 
++
++>> B5: Briefly describe your implementation of the "wait" system call
++>> and how it interacts with process termination.
++
++The wait system call, iterates through the running proccess' children and if
++it finds a child that has the correct TID, removes the child from its waiting
++list and waits for the child to signal that it has completed its exit cleanp.
++The parent process then collects the child's exit status, signals to the child
++that it may terminate and returns the exit status.
++
++>> B6: Any access to user program memory at a user-specified address
++>> can fail due to a bad pointer value.  Such accesses must cause the
++>> process to be terminated.  System calls are fraught with such
++>> accesses, e.g. a "write" system call requires reading the system
++>> call number from the user stack, then each of the call's three
++>> arguments, then an arbitrary amount of user memory, and any of
++>> these can fail at any point.  This poses a design and
++>> error-handling problem: how do you best avoid obscuring the primary
++>> function of code in a morass of error-handling?  Furthermore, when
++>> an error is detected, how do you ensure that all temporarily
++>> allocated resources (locks, buffers, etc.) are freed?  In a few
++>> paragraphs, describe the strategy or strategies you adopted for
++>> managing these issues.  Give an example.
++
++---- SYNCHRONIZATION ----
++
++>> B7: The "exec" system call returns -1 if loading the new executable
++>> fails, so it cannot return before the new executable has completed
++>> loading.  How does your code ensure this?  How is the load
++>> success/failure status passed back to the thread that calls "exec"?
++
++We added a a semaphore `loaded_sema` to struct thread. Each parents when
++making a call to exec (and therefore process_execute) has to wait for the
++child to signal them using this semaphore that they have completed loading.
++Before the child signals the parent, it sets its member `loaded`. Therefore the
++parent can check the `loaded` member once it has been signaled to decided how
++to return from exec.
++
++>> B8: Consider parent process P with child process C.  How do you
++>> ensure proper synchronization and avoid race conditions when P
++>> calls wait(C) before C exits?  After C exits?  How do you ensure
++>> that all resources are freed in each case?  How about when P
++>> terminates without waiting, before C exits?  After C exits?  Are
++>> there any special cases?
++
++Case 1 ( wait(C) before C exits):
++In this case, the parent waits to be signaled by the child through the
++`wait_for_child` semaphore. This semaphore is signalled once the child
++completes their cleanup as described in B5. Since it is a semaphore the
++parent is blocking until they receive the signal.
++
++Case 2( wait(C) after C exits ):
++After C signals to the parent in the manner described above, C waits on P
++to signal it back that it has successfully extracted its exit status. This
++is done through the `wait_for_parent` semaphore.
++
++All cleanup is done with a call to thread_exit since every path to a thread
++exiting / terminating go through this path. Thread exit then calls process_exit
++which is reponsible for all cleanup. In process_exit, each thread closes each 
++of the files in its file descriptor table, releases all the locks it currently
++holds (including the filesystem lock) and finally signals each of its 
++children's `wait_for_parent` semaphores. This means in the case that the parent
++exits without waiting, each of the orphaned children can exit freely instead
++of waiting on this semaphore.
++
++If P terminates without waiting, during its cleanup process it signals the
++`wait_for_parent` semaphore, meaning that once an orphaned child exits it will
++not wait for a signal from the parent, it just becomes free to exit.
++
++
++---- RATIONALE ----
++
++>> B9: Why did you choose to implement access to user memory from the
++>> kernel in the way that you did?
++
++>> B10: What advantages or disadvantages can you see to your design
++>> for file descriptors?
++
++>> B11: The default tid_t to pid_t mapping is the identity mapping.
++>> If you changed it, what advantages are there to your approach?
++
++               SURVEY QUESTIONS
++               ================
++
++Answering these questions is optional, but it will help us improve the
++course in future quarters.  Feel free to tell us anything you
++want--these questions are just to spur your thoughts.  You may also
++choose to respond anonymously in the course evaluations at the end of
++the quarter.
++
++>> In your opinion, was this assignment, or any one of the three problems
++>> in it, too easy or too hard?  Did it take too long or too little time?
++
++>> Did you find that working on a particular part of the assignment gave
++>> you greater insight into some aspect of OS design?
++
++>> Is there some particular fact or hint we should give students in
++>> future quarters to help them solve the problems?  Conversely, did you
++>> find any of our guidance to be misleading?
++
++>> Do you have any suggestions for the TAs to more effectively assist
++>> students, either for future quarters or the remaining projects?
++
++>> Any other comments?
+diff --git a/src/userprog/exception.c b/src/userprog/exception.c
+index 19aca12..4a90879 100644
+--- a/src/userprog/exception.c
++++ b/src/userprog/exception.c
+@@ -89,6 +89,7 @@ kill (struct intr_frame *f)
+       printf ("%s: dying due to interrupt %#04x (%s).\n",
+               thread_name (), f->vec_no, intr_name (f->vec_no));
+       intr_dump_frame (f);
++      thread_current ()->exit_status = -1;
+       thread_exit (); 
+ 
+     case SEL_KCSEG:
+diff --git a/src/userprog/process.c b/src/userprog/process.c
+index c0e5215..a71777b 100644
+--- a/src/userprog/process.c
++++ b/src/userprog/process.c
+@@ -5,9 +5,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "devices/timer.h"
+ #include "userprog/gdt.h"
+ #include "userprog/pagedir.h"
+ #include "userprog/tss.h"
++#include "userprog/syscall.h"
+ #include "filesys/directory.h"
+ #include "filesys/file.h"
+ #include "filesys/filesys.h"
+@@ -38,10 +40,48 @@ process_execute (const char *file_name)
+     return TID_ERROR;
+   strlcpy (fn_copy, file_name, PGSIZE);
+ 
++  /* As to not interfere with the fn_copy and file_name used by thread create
++     and load */
++  char *command_name = palloc_get_page (0);
++  if (command_name == NULL)
++    return TID_ERROR;
++  strlcpy (command_name, fn_copy, PGSIZE);
++
++  char *token, *save_ptr;
++  token = strtok_r(command_name, " ", &save_ptr);
++
+   /* Create a new thread to execute FILE_NAME. */
+-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+-  if (tid == TID_ERROR)
+-    palloc_free_page (fn_copy); 
++  tid = thread_create (token, PRI_DEFAULT, start_process, fn_copy);
++
++  /* Ugly way of making sure parent waits for child to load. */
++  struct thread *target_child = NULL;
++  struct list *children = &thread_current ()->children;
++  struct list_elem *e;
++
++  for (e = list_begin (children); e != list_end (children); e = list_next (e))
++    {
++      struct thread *cur_child;
++
++      cur_child = list_entry (e, struct thread, children_elem);
++      if (cur_child->tid == tid)
++      {
++        target_child = cur_child;
++        break;
++      }
++    }
++  
++  if (!target_child)
++    return TID_ERROR;
++  
++  sema_down (&target_child->loaded_sema);
++  
++  if (!target_child->loaded)
++    return TID_ERROR;
++
++  // if (tid == TID_ERROR)
++    // palloc_free_page (fn_copy);
++
++  palloc_free_page (command_name); 
+   return tid;
+ }
+ 
+@@ -61,10 +101,17 @@ start_process (void *file_name_)
+   if_.eflags = FLAG_IF | FLAG_MBS;
+   success = load (file_name, &if_.eip, &if_.esp);
+ 
++  /* Inform parent of load status. */
++  thread_current ()->loaded = success;
++  sema_up (&thread_current ()->loaded_sema);
++
+   /* If load failed, quit. */
+   palloc_free_page (file_name);
+   if (!success) 
++  {
++    thread_current ()->exit_status = -1;
+     thread_exit ();
++  }
+ 
+   /* Start the user process by simulating a return from an
+      interrupt, implemented by intr_exit (in
+@@ -81,23 +128,74 @@ start_process (void *file_name_)
+    exception), returns -1.  If TID is invalid or if it was not a
+    child of the calling process, or if process_wait() has already
+    been successfully called for the given TID, returns -1
+-   immediately, without waiting.
+-
+-   This function will be implemented in problem 2-2.  For now, it
+-   does nothing. */
++   immediately, without waiting. */
+ int
+-process_wait (tid_t child_tid UNUSED) 
++process_wait (tid_t child_tid) 
+ {
+-  return -1;
++  struct thread *parent;
++  struct list *children;
++  struct list_elem *e;
++
++  parent = thread_current ();
++  children = &parent->children;
++
++  for (e = list_begin (children); e != list_end (children); e = list_next (e))
++    {
++      struct thread *cur_child;
++
++      cur_child = list_entry (e, struct thread, children_elem);
++      if (cur_child->tid == child_tid)
++      {
++        list_remove (&cur_child->children_elem);
++
++        sema_down (&cur_child->exit_status_ready);
++        int status = cur_child->exit_status;
++        sema_up (&cur_child->exit_status_received);
++        return status;
++      }
++    }
++  
++  return TID_ERROR;
+ }
+ 
+-/* Free the current process's resources. */
++/* Free the current process's resources. All files it has open,
++   locks that it holds and signals all orphaned children that 
++   they can exit. */
+ void
+ process_exit (void)
+ {
+   struct thread *cur = thread_current ();
+   uint32_t *pd;
+ 
++  printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
++
++  /* Close all file descriptors. */
++  for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
++    {
++      if (cur->fdtable[fd] != NULL)
++        {
++          file_close (cur->fdtable[fd]);
++          cur->fdtable[fd] = NULL;
++        }
++    }
++  
++  /* Release all locks held by thread. */
++  struct list_elem *e;
++  for (e = list_begin (&cur->locks_held); e != list_end (&cur->locks_held);
++       e = list_next (e))
++    {
++      struct lock *l = list_entry (e, struct lock, locks_held_elem);
++      lock_release (l);
++    }
++  
++  
++  for (e = list_begin (&cur->children); e != list_end (&cur->children);
++       e = list_next (e))
++    {
++      struct thread *child = list_entry (e, struct thread, children_elem);
++      sema_up (&child->exit_status_received);
++    }
++
+   /* Destroy the current process's page directory and switch back
+      to the kernel-only page directory. */
+   pd = cur->pagedir;
+@@ -114,6 +212,10 @@ process_exit (void)
+       pagedir_activate (NULL);
+       pagedir_destroy (pd);
+     }
++  
++  /* Signal to parent and wait until they receive exit status */
++  sema_up (&cur->exit_status_ready);
++  sema_down (&cur->exit_status_received);
+ }
+ 
+ /* Sets up the CPU for running user code in the current
+@@ -195,7 +297,10 @@ struct Elf32_Phdr
+ #define PF_W 2          /* Writable. */
+ #define PF_R 4          /* Readable. */
+ 
+-static bool setup_stack (void **esp);
++/* Pushes a word at SRC to the minimal stack pointed to by *ESP */
++#define PUSH_STACK(ESP) *ESP -= WORD_SIZE
++
++static bool setup_stack (void **esp, const char *file_name);
+ static bool validate_segment (const struct Elf32_Phdr *, struct file *);
+ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
+                           uint32_t read_bytes, uint32_t zero_bytes,
+@@ -203,11 +308,12 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
+ 
+ /* Loads an ELF executable from FILE_NAME into the current thread.
+    Stores the executable's entry point into *EIP
+-   and its initial stack pointer into *ESP.
++   and its initial stack pointer into *ESP. Signals parent
+    Returns true if successful, false otherwise. */
+ bool
+ load (const char *file_name, void (**eip) (void), void **esp) 
+ {
++  char *file_name_copy = NULL;
+   struct thread *t = thread_current ();
+   struct Elf32_Ehdr ehdr;
+   struct file *file = NULL;
+@@ -222,13 +328,25 @@ load (const char *file_name, void (**eip) (void), void **esp)
+   process_activate ();
+ 
+   /* Open executable file. */
+-  file = filesys_open (file_name);
++  char *token, *save_ptr;
++  file_name_copy = palloc_get_page (0);
++  if (file_name_copy == NULL)
++    goto done;
++
++  strlcpy (file_name_copy, file_name, PGSIZE);
++  
++  token = strtok_r (file_name_copy, " ", &save_ptr);
++
++  lock_acquire(&filesys_lock);
++  file = filesys_open (token);
++
+   if (file == NULL) 
+     {
+-      printf ("load: %s: open failed\n", file_name);
+-      goto done; 
++      printf ("load: %s: open failed\n", token);
++      goto done;
+     }
+ 
++
+   /* Read and verify executable header. */
+   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
+       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
+@@ -302,17 +420,22 @@ load (const char *file_name, void (**eip) (void), void **esp)
+     }
+ 
+   /* Set up stack. */
+-  if (!setup_stack (esp))
++  if (!setup_stack (esp, file_name))
+     goto done;
+-
++  
+   /* Start address. */
+   *eip = (void (*) (void)) ehdr.e_entry;
+ 
+   success = true;
++  file_deny_write (file);
+ 
+  done:
+   /* We arrive here whether the load is successful or not. */
+-  file_close (file);
++  lock_release (&filesys_lock);
++  if (file_name_copy != NULL)
++    palloc_free_page (file_name_copy);
++  
++  thread_current ()->fdtable[EXEC_FD] = file;
+   return success;
+ }
+ 
+@@ -427,11 +550,12 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
+ /* Create a minimal stack by mapping a zeroed page at the top of
+    user virtual memory. */
+ static bool
+-setup_stack (void **esp) 
++setup_stack (void **esp, const char *file_name) 
+ {
+   uint8_t *kpage;
+   bool success = false;
+ 
++  // 64-bit so we don't assume word length
+   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+   if (kpage != NULL) 
+     {
+@@ -441,6 +565,77 @@ setup_stack (void **esp)
+       else
+         palloc_free_page (kpage);
+     }
++
++  // uint64_t to make sure works for all address lengths
++  void * start_height = *esp;
++
++  char *token, *save_ptr;
++  char *file_name_copy = palloc_get_page (0);
++  if (file_name_copy == NULL)
++    return false;
++
++  strlcpy (file_name_copy, file_name, PGSIZE);
++
++  char **argv = palloc_get_page (0);
++  if (argv == NULL)
++    return false;
++
++  int argc = 0;
++  for (token = strtok_r (file_name_copy, " ", &save_ptr); token != NULL;
++      token = strtok_r (NULL, " ", &save_ptr))
++    {
++      size_t length = strlen (token) + 1;
++      *esp -= length;
++      strlcpy (*esp, token, length);
++      argv[argc] = *esp;
++      argc++;
++    }
++
++  palloc_free_page(file_name_copy);
++
++  int padding = (size_t) *esp % WORD_SIZE;
++
++  /* Calculate if will overflow 1 page
++      Magic 12 is bytes needed for argc, argv and ret address
++      3 * WORD_SIZE */
++  uint32_t stack_bytes_needed = (start_height - *esp) +
++                                (WORD_SIZE * argc) + 12 + padding;
++  
++  if (stack_bytes_needed > PGSIZE)
++    return false;
++
++  if (padding)
++  {
++    *esp -= padding;
++    memset (*esp, 0, padding);
++  }
++
++  /* Push Null Pointer Sentinel as required by C standard*/
++  *esp -= WORD_SIZE;
++  memset(*esp, 0, WORD_SIZE);
++
++  /* Push arguments in reverse order*/
++  for (int i = argc - 1; i >= 0; i--) 
++  {
++    PUSH_STACK(esp);
++    memcpy (*esp, &argv[i], WORD_SIZE);
++  }
++
++  palloc_free_page (argv);
++
++  /* Push address of argv*/
++  void *first_arg_addr = *esp;
++  PUSH_STACK(esp);
++  memcpy (*esp, &first_arg_addr, WORD_SIZE);
++
++  /* Push argc*/
++  PUSH_STACK(esp);
++  memcpy(*esp, &argc, WORD_SIZE);
++
++  /* Push fake pointer */
++  *esp -= WORD_SIZE;
++  memset(*esp, 0, WORD_SIZE);
++
+   return success;
+ }
+ 
+diff --git a/src/userprog/process.h b/src/userprog/process.h
+index 688cd2a..9824587 100644
+--- a/src/userprog/process.h
++++ b/src/userprog/process.h
+@@ -3,6 +3,8 @@
+ 
+ #include "threads/thread.h"
+ 
++#define WORD_SIZE sizeof (void *)
++
+ tid_t process_execute (const char *file_name);
+ int process_wait (tid_t);
+ void process_exit (void);
+diff --git a/src/userprog/syscall.c b/src/userprog/syscall.c
+index 370c89b..d4a13cd 100644
+--- a/src/userprog/syscall.c
++++ b/src/userprog/syscall.c
+@@ -1,20 +1,498 @@
+-#include "userprog/syscall.h"
+ #include <stdio.h>
++#include <string.h>
+ #include <syscall-nr.h>
++#include "devices/input.h"
++#include "devices/shutdown.h"
++#include "filesys/directory.h"
++#include "filesys/filesys.h"
++#include "filesys/file.h"
+ #include "threads/interrupt.h"
++#include "threads/palloc.h"
++#include "threads/synch.h"
+ #include "threads/thread.h"
++#include "threads/vaddr.h"
++#include "userprog/pagedir.h"
++#include "userprog/process.h"
++#include "userprog/syscall.h"
+ 
+ static void syscall_handler (struct intr_frame *);
+ 
++static void sys_halt (void);
++static void sys_exit (uint32_t *esp);
++static pid_t sys_exec (uint32_t *esp);
++static int sys_wait (uint32_t *esp);
++static bool sys_create (uint32_t *esp);
++static bool sys_remove (uint32_t *esp);
++static int sys_open (uint32_t *esp);
++static int sys_filesize (uint32_t *esp);
++static int sys_read (uint32_t *esp);
++static int sys_write (uint32_t *esp);
++static void sys_seek (uint32_t *esp);
++static unsigned sys_tell (uint32_t *esp);
++static void sys_close (uint32_t *esp);
++
++static void exit (int status);
++
++static char *get_arg_string (void *esp, int pos, int limit);
++static void *get_arg_buffer (void *esp, int pos, int size);
++static int get_arg_int (void *esp, int pos);
++
++static bool is_valid_memory (void *buffer, unsigned size);
++static bool is_valid_address (const void *uaddr);
++static bool is_valid_fd (int fd);
++
++#define CMD_LINE_MAX 128        /* Maximum number of command line characters */
++
+ void
+ syscall_init (void) 
+ {
+   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
++  lock_init (&filesys_lock);
+ }
+ 
+ static void
+-syscall_handler (struct intr_frame *f UNUSED) 
++syscall_handler (struct intr_frame *f) 
+ {
+-  printf ("system call!\n");
++  uint32_t syscall_num;
++
++  if (!is_valid_memory (f->esp, sizeof(char *)))
++    exit (-1);
++
++  syscall_num = get_arg_int(f->esp, 0);
++  switch (syscall_num)
++  {
++    case SYS_HALT:                   /* Halt the operating system. */
++      sys_halt ();
++      break;
++    case SYS_EXIT:                   /* Terminate this process. */
++      sys_exit (f->esp);
++      break;
++    case SYS_EXEC:                   /* Start another process. */
++      f->eax = sys_exec (f->esp);
++      break;
++    case SYS_WAIT:                   /* Wait for a child process to die. */
++      f->eax = sys_wait (f->esp);
++      break;
++    case SYS_CREATE:                 /* Create a file. */
++      f->eax = sys_create (f->esp);
++      break;
++    case SYS_REMOVE:                 /* Delete a file. */
++      f->eax = sys_remove (f->esp);
++      break;
++    case SYS_OPEN:                   /* Open a file. */
++      f->eax = sys_open (f->esp);
++      break;
++    case SYS_FILESIZE:               /* Obtain a file's size. */
++      f->eax = sys_filesize (f->esp);
++      break;
++    case SYS_READ:                   /* Read from a file. */
++      f->eax = sys_read (f->esp);
++      break;
++    case SYS_WRITE:                  /* Write to a file. */
++      f->eax = sys_write (f->esp);
++      break;
++    case SYS_SEEK:                   /* Change position in a file. */
++      sys_seek (f->esp);
++      break;
++    case SYS_TELL:                   /* Report current position in a file. */
++      f->eax = sys_tell (f->esp);
++      break;
++    case SYS_CLOSE:                  /* Close a file. */
++      sys_close (f->esp);
++      break;
++    default:
++      exit (-1);
++  }
++}
++
++void
++exit (int status)
++{
++  thread_current ()->exit_status = status;
++  
++  /* We clean everything up in process_exit since we might not 
++     go through here. */
++
+   thread_exit ();
+ }
++
++void
++sys_halt ()
++{
++  shutdown_power_off ();
++}
++
++void
++sys_exit (uint32_t *esp)
++{
++  int status;
++  status = get_arg_int (esp, 1);
++  exit (status);
++}
++
++pid_t
++sys_exec (uint32_t *esp)
++{
++  char *cmd_line;
++
++  cmd_line = get_arg_string (esp, 1, CMD_LINE_MAX);
++  if (cmd_line == NULL)
++    return TID_ERROR;
++  
++  return process_execute (cmd_line);
++}
++
++int
++sys_wait (uint32_t *esp)
++{
++  pid_t pid;
++
++  pid = get_arg_int (esp, 1);
++
++  return process_wait (pid);
++}
++
++bool
++sys_create (uint32_t *esp)
++{
++  char *fname;
++  off_t initial_size;
++  bool ret = false;
++
++  fname = get_arg_string (esp, 1, NAME_MAX);
++
++  if (fname != NULL)
++  {
++    initial_size = get_arg_int (esp, 2);
++    lock_acquire (&filesys_lock);
++    ret = filesys_create (fname, initial_size);
++    lock_release (&filesys_lock);
++  }
++  return ret;
++}
++
++bool
++sys_remove (uint32_t *esp)
++{
++  bool ret = false;
++  char *fname = get_arg_string (esp, 1, NAME_MAX);
++
++  if (fname != NULL)
++  {
++    lock_acquire (&filesys_lock);
++    ret = filesys_remove (fname);
++    lock_release (&filesys_lock);
++  }
++  return ret;
++}
++
++int
++sys_open (uint32_t *esp)
++{
++  int ret = -1;
++  char *fname = get_arg_string (esp, 1, NAME_MAX);
++  struct thread *cur = thread_current ();
++
++  if (fname == NULL)
++    return ret;
++
++  lock_acquire (&filesys_lock);
++  struct file *fp = filesys_open (fname);
++  lock_release (&filesys_lock);
++
++  /* File open unsuccessful or file limit hit */
++  if (fp == NULL || cur->next_fd < 0)
++    return ret;
++
++  ret = cur->next_fd;
++  cur->fdtable[ret] = fp;
++  
++  int new_fd = STDOUT_FILENO + 1;
++  for (; new_fd < MAX_FILES; new_fd++) 
++    {
++      if (cur->fdtable[new_fd] == NULL)
++      {
++        cur->next_fd = new_fd;
++        break;
++      }
++    }
++
++  if (new_fd == MAX_FILES)
++    cur->next_fd = -1;
++  
++  return ret;
++
++}
++
++int
++sys_filesize (uint32_t *esp)
++{
++  int fd;
++  int size;
++  
++  fd = get_arg_int (esp, 1);
++
++  if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
++    exit (-1);
++  
++  struct file *file = thread_current ()->fdtable[fd];
++
++	if (file == NULL)
++		exit (-1);
++  
++  lock_acquire (&filesys_lock);
++	size = file_length (file);
++  lock_release (&filesys_lock);
++  
++  return size;
++}
++
++int
++sys_read (uint32_t *esp)
++{
++
++  int fd;
++  uint8_t *buffer;
++  unsigned size;
++  int bytes_read = 0;
++
++  fd = get_arg_int (esp, 1);
++  size = get_arg_int (esp, 3);
++  buffer = (uint8_t *) get_arg_buffer (esp, 2, size);
++
++  if (!is_valid_fd (fd) || fd == STDOUT_FILENO)
++    {
++      return -1;
++    }
++  else if (fd == STDIN_FILENO)
++    {
++      while (size--)
++        {
++          *buffer++ = input_getc ();
++          bytes_read++;
++        }
++    }
++  else
++    {
++        struct thread *cur = thread_current ();
++        struct file *fp = cur->fdtable[fd];
++
++        if (fp == NULL) {
++          return -1;
++        }
++        lock_acquire (&filesys_lock);
++        bytes_read = file_read(fp, buffer, size);
++        lock_release (&filesys_lock);
++    }
++  
++  return bytes_read;
++}
++
++#define BUF_MAX 512;            /* Max bytes to write to console in one call */
++
++static int
++sys_write (uint32_t *esp)
++{
++  int bytes_written = 0;
++
++  int fd;
++  char *buffer;
++  unsigned size;
++
++  fd = get_arg_int (esp, 1);
++  size = get_arg_int (esp, 3);
++  buffer = get_arg_buffer (esp, 2, size);
++
++  if (!is_valid_fd (fd) || fd == STDIN_FILENO)
++    {
++      bytes_written = -1;
++    }
++  else if (fd == STDOUT_FILENO)
++    {
++      int remaining = size;
++      while (remaining > 0)
++        {
++          putbuf (buffer, size);
++          remaining -= BUF_MAX;
++        }
++      bytes_written = size;
++    }
++  else 
++  {
++    struct thread *cur = thread_current ();
++    struct file *fp = cur->fdtable[fd];
++
++    if (fp == NULL) 
++      return -1;
++
++    lock_acquire (&filesys_lock);
++    bytes_written = file_write(fp, buffer, size);
++    lock_release (&filesys_lock);
++  }
++
++  return bytes_written;
++}
++
++static void
++sys_seek (uint32_t *esp)
++{
++  int fd;
++  unsigned pos;
++  struct thread *cur;
++
++  fd = get_arg_int (esp, 1);
++  pos = get_arg_int (esp, 2);
++  cur = thread_current ();
++
++  if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
++    exit (-1);
++  
++  file_seek (cur->fdtable[fd], pos);
++}
++
++static unsigned
++sys_tell (uint32_t *esp)
++{
++  int fd;
++  struct thread *cur;
++
++  fd = get_arg_int (esp, 1);
++  cur = thread_current ();
++
++  if (cur->fdtable[fd] == NULL)
++    exit (-1);
++
++  return file_tell (cur->fdtable[fd]);
++}
++
++static void
++sys_close (uint32_t *esp)
++{
++  int fd;
++
++  fd = get_arg_int (esp, 1);
++
++  if (fd >= MAX_FILES || fd == STDIN_FILENO || fd == STDOUT_FILENO)
++    return;
++  
++  struct thread *cur = thread_current ();
++  struct file *fp = cur->fdtable[fd];
++
++  /* Have previously closed the given file descriptor. */
++  if (fp == NULL)
++    return;
++  
++  lock_acquire (&filesys_lock);
++  file_close (fp);
++  lock_release (&filesys_lock);
++
++  cur->fdtable[fd] = NULL;
++
++  if (fd < cur->next_fd)
++    cur->next_fd = fd;
++
++}
++
++/* Returns the int at position POS on stack pointed at
++   by ESP. Exits is any of int bytes are in invalid
++   memory. */
++static int
++get_arg_int (void *esp, int pos)
++{
++  uint32_t *arg;
++  arg = (uint32_t *)esp + pos;
++  if (!is_valid_memory (arg, sizeof (int)))
++    exit (-1);
++
++  return *(int *)arg;
++}
++
++/* Returns the buffer at position POS on stack pointed at
++   by ESP, validating SIZE buffer bytes. Exits is any of 
++   buffer pointer bytes or buffer bytes are in invalid
++   memory. */
++static void *
++get_arg_buffer (void *esp, int pos, int size)
++{
++  void **arg;
++
++  arg = (void **)esp + pos;
++  
++  if (!is_valid_memory (arg, sizeof(char *)) || !is_valid_memory (*arg, size))
++    exit (-1);
++
++  return *(void **)arg;
++}
++
++/* Returns the argument string at position POS on stack pointed at
++   by ESP, reading at most LIMIT bytes. Exits if any of the bytes
++   of the char * or actually string bytes are in invalid memory. Returns
++   NULL if its an empty string or the string is larger than LIMIT */
++static char *
++get_arg_string (void *esp, int pos, int limit)
++{
++  char **str_ptr;
++  char *cur;
++  char *end;
++
++  str_ptr = (char **)esp + pos;
++
++  /* Check the bytes of the char * are all in valid memory */
++  if (!is_valid_memory (str_ptr, sizeof (char *)))
++    exit (-1);
++
++  end = *str_ptr + limit + 1;
++
++  
++  for (cur = *str_ptr; cur < end; cur++)
++    {
++      if (!is_valid_address (cur))
++        exit (-1);
++      
++      if (*cur == '\0')
++        break;
++      
++    }
++  
++  /* Null indicates that filename
++     is either empty or too long. */
++  if (cur == *str_ptr || cur == end)
++    *str_ptr = NULL;
++  
++  return *str_ptr;
++}
++
++/* Returns whether bytes starting at START are in valid user space */
++static bool 
++is_valid_memory (void *start, unsigned size)
++{
++  /* TODO: depending on operation, might need to double check permissions. */
++  uint8_t *cur;
++  uint8_t *end;
++  unsigned start_offs;
++  
++  end = (uint8_t *)start + size;
++  start_offs = pg_ofs (start);
++
++  for (cur = start - start_offs; cur < end; cur += PGSIZE)
++    {
++      if (!is_valid_address (cur))
++        return false;
++    }
++  return true;
++}
++
++/* Returns whether VADDR is a valid memory address. This means it is
++   in user space and has been allocated in the page table */
++static bool 
++is_valid_address (const void *vaddr)
++{
++  return vaddr != NULL && is_user_vaddr (vaddr)
++                       && pagedir_get_page (thread_current ()->pagedir, vaddr);
++}
++
++/* Retunrs whether FD is between 0 and MAX_FILES */
++static bool
++is_valid_fd (int fd) {
++  return fd >= 0 && fd < MAX_FILES;
++}
+diff --git a/src/userprog/syscall.h b/src/userprog/syscall.h
+index 9059096..d8b425d 100644
+--- a/src/userprog/syscall.h
++++ b/src/userprog/syscall.h
+@@ -1,6 +1,10 @@
+ #ifndef USERPROG_SYSCALL_H
+ #define USERPROG_SYSCALL_H
+ 
++typedef int pid_t;
++/* Coarse grain lock for filesystem access */
++struct lock filesys_lock;
++
+ void syscall_init (void);
+ 
+ #endif /* userprog/syscall.h */
