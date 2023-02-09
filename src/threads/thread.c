@@ -609,6 +609,9 @@ init_thread (struct thread *t, const char *name, int priority)
   }
 
   #ifdef USERPROG
+    /* Default exit status to normal */
+    t->exit_status = 0;
+    /* Set all pointers to NULL */
     memset (t->fdtable, 0, sizeof (*t->fdtable));
     /* Set fd = 0 to invalid ptr */
     t->fdtable[RESERVED_FD] = THREAD_MAGIC;
