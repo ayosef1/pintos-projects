@@ -151,9 +151,9 @@ process_wait (tid_t child_tid)
       {
         list_remove (&cur_child->children_elem);
 
-        sema_down (&cur_child->wait_for_child);
+        sema_down (&cur_child->exit_ready);
         int status = cur_child->exit_status;
-        sema_up (&cur_child->wait_for_parent);
+        sema_up (&cur_child->exit_cleared);
         return status;
       }
     }
@@ -198,7 +198,7 @@ process_exit (void)
        e = list_next (e))
     {
       struct thread *child = list_entry (e, struct thread, children_elem);
-      sema_up (&child->wait_for_child);
+      sema_up (&child->exit_cleared);
     }
 
   /* Destroy the current process's page directory and switch back
@@ -219,8 +219,8 @@ process_exit (void)
     }
   
   // Signal to parent exited
-  sema_up (&cur->wait_for_child);
-  sema_down (&cur->wait_for_parent);
+  sema_up (&cur->exit_ready);
+  sema_down (&cur->exit_cleared);
 }
 
 /* Sets up the CPU for running user code in the current

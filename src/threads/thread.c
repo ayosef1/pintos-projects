@@ -249,7 +249,6 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -622,8 +621,8 @@ init_thread (struct thread *t, const char *name, int priority)
       t->fdtable[fd] = NULL;
     }
     list_init (&t->children);
-    sema_init (&t->wait_for_child, 0);
-    sema_init (&t->wait_for_parent, 0);
+    sema_init (&t->exit_ready, 0);
+    sema_init (&t->exit_cleared, 0);
     sema_init (&t->loaded_sema, 0);
     t->loaded = false;
 

@@ -131,9 +131,9 @@ struct thread
     struct list children;                       /* List of child structs. */
     struct list_elem children_elem;             /* List element for per thread
                                                    children list */
-    struct semaphore wait_for_child;            /* Sync for waiting parent to
+    struct semaphore exit_ready;                /* Sync for waiting parent to
                                                    get exit status of child */
-    struct semaphore wait_for_parent;           /* Sync for child to exit after
+    struct semaphore exit_cleared;              /* Sync for child to exit after
                                                    parent gets exit status */
 
     struct semaphore loaded_sema;               /* Sync for child loading and
