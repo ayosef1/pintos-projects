@@ -36,6 +36,10 @@ typedef int tid_t;
 /* Size of the file descriptor table and therefore limit on
    number of files a process can open */
 #define MAX_FILES 128
+/* Reserved File descriptor should never allocate */
+#define RESERVED_FD 0
+/* Reserved File descriptor for process executable */
+#define EXEC_FD 1
 
 /* A kernel thread or user process.
 
@@ -131,17 +135,15 @@ struct thread
     struct list children;                       /* List of child structs. */
     struct list_elem children_elem;             /* List element for per thread
                                                    children list */
-    struct semaphore exit_ready;                /* Sync for waiting parent to
+    struct semaphore exit_status_ready;         /* Sync for waiting parent to
                                                    get exit status of child */
-    struct semaphore exit_cleared;              /* Sync for child to exit after
+    struct semaphore exit_status_received;      /* Sync for child to exit after
                                                    parent gets exit status */
 
     struct semaphore loaded_sema;               /* Sync for child loading and
                                                    returning child tid from
                                                    exec syscall */
    struct file *fdtable[MAX_FILES];             /* File Descriptor Table. */
-
-   struct file *executable;
 #endif
 
     /* Owned by thread.c. */

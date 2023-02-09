@@ -128,10 +128,7 @@ start_process (void *file_name_)
    exception), returns -1.  If TID is invalid or if it was not a
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
-   immediately, without waiting.
-
-   This function will be implemented in problem 2-2.  For now, it
-   does nothing. */
+   immediately, without waiting. */
 int
 process_wait (tid_t child_tid) 
 {
@@ -151,9 +148,9 @@ process_wait (tid_t child_tid)
       {
         list_remove (&cur_child->children_elem);
 
-        sema_down (&cur_child->exit_ready);
+        sema_down (&cur_child->exit_status_ready);
         int status = cur_child->exit_status;
-        sema_up (&cur_child->exit_cleared);
+        sema_up (&cur_child->exit_status_received);
         return status;
       }
     }
@@ -161,7 +158,9 @@ process_wait (tid_t child_tid)
   return TID_ERROR;
 }
 
-/* Free the current process's resources. */
+/* Free the current process's resources. All files it has open,
+   locks that it holds and signals all orphaned children that 
+   they can exit. */
 void
 process_exit (void)
 {
@@ -170,18 +169,14 @@ process_exit (void)
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
 
-  if (cur->executable != NULL)
-    file_close (cur->executable);
-
   /* Close all file descriptors. */
-  int i;
-  for (i = STDOUT_FILENO + 1; i < MAX_FILES; i++)
+  for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
     {
-      if (cur->fdtable[i] != NULL)
-      {
-        file_close (cur->fdtable[i]);
-        cur->fdtable[i] = NULL;
-      }
+      if (cur->fdtable[fd] != NULL)
+        {
+          file_close (cur->fdtable[fd]);
+          cur->fdtable[fd] = NULL;
+        }
     }
   
   /* Release all locks held by thread. */
@@ -198,7 +193,7 @@ process_exit (void)
        e = list_next (e))
     {
       struct thread *child = list_entry (e, struct thread, children_elem);
-      sema_up (&child->exit_cleared);
+      sema_up (&child->exit_status_received);
     }
 
   /* Destroy the current process's page directory and switch back
@@ -218,9 +213,9 @@ process_exit (void)
       pagedir_destroy (pd);
     }
   
-  // Signal to parent exited
-  sema_up (&cur->exit_ready);
-  sema_down (&cur->exit_cleared);
+  /* Signal to parent and wait until they receive exit status */
+  sema_up (&cur->exit_status_ready);
+  sema_down (&cur->exit_status_received);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -313,7 +308,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
-   and its initial stack pointer into *ESP.
+   and its initial stack pointer into *ESP. Signals parent
    Returns true if successful, false otherwise. */
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
@@ -440,7 +435,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (file_name_copy != NULL)
     palloc_free_page (file_name_copy);
   
-  thread_current ()->executable = file;
+  thread_current ()->fdtable[EXEC_FD] = file;
   return success;
 }
 

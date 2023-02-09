@@ -398,7 +398,7 @@ thread_set_priority (int new_priority)
   ASSERT (!intr_context ());
   old_level = intr_disable ();
 
-  struct thread * cur = thread_current ();
+  struct thread *cur = thread_current ();
 
   bool change_priority = cur->original_priority == cur->priority
                          || new_priority > cur->priority;
@@ -609,27 +609,20 @@ init_thread (struct thread *t, const char *name, int priority)
   }
 
   #ifdef USERPROG
-    int fd = STDIN_FILENO;
-
-    // Set STDIN & STDOUT to invalid ptrs
-    t->fdtable[fd++] = THREAD_MAGIC;
-    t->fdtable[fd++] = THREAD_MAGIC;
-
-    t->next_fd = fd;
-
-    for (; fd < MAX_FILES; fd++ ) {
-      t->fdtable[fd] = NULL;
-    }
+    memset (t->fdtable, 0, sizeof (*t->fdtable));
+    /* Set fd = 0 to invalid ptr */
+    t->fdtable[RESERVED_FD] = THREAD_MAGIC;
+    /* First two FDs reserved */
+    t->next_fd = EXEC_FD + 1;
+      
     list_init (&t->children);
-    sema_init (&t->exit_ready, 0);
-    sema_init (&t->exit_cleared, 0);
+    sema_init (&t->exit_status_ready, 0);
+    sema_init (&t->exit_status_received, 0);
     sema_init (&t->loaded_sema, 0);
     t->loaded = false;
 
     if (t != initial_thread)
-    {
       list_push_back (&thread_current ()->children, &t->children_elem);
-    }
   #endif
 
   /* Initialize the list of locks held by current list*/
