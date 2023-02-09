@@ -393,17 +393,24 @@ sys_close (uint32_t *esp)
 
 }
 
+/* Returns the int at position POS on stack pointed at
+   by ESP. Exits is any of int bytes are in invalid
+   memory. */
 static int
 get_arg_int (void *esp, int pos)
 {
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
-  if (!is_valid_address (arg))
+  if (!is_valid_memory (arg, sizeof (int)))
     exit (-1);
 
   return *(int *)arg;
 }
 
+/* Returns the buffer at position POS on stack pointed at
+   by ESP, validating SIZE buffer bytes. Exits is any of 
+   buffer pointer bytes or buffer bytes are in invalid
+   memory. */
 static void *
 get_arg_buffer (void *esp, int pos, int size)
 {
@@ -417,6 +424,10 @@ get_arg_buffer (void *esp, int pos, int size)
   return *(void **)arg;
 }
 
+/* Returns the argument string at position POS on stack pointed at
+   by ESP, reading at most LIMIT bytes. Exits if any of the bytes
+   of the char * or actually string bytes are in invalid memory. Returns
+   NULL if its an empty string or the string is larger than LIMIT */
 static char *
 get_arg_string (void *esp, int pos, int limit)
 {
@@ -426,6 +437,7 @@ get_arg_string (void *esp, int pos, int limit)
 
   str_ptr = (char **)esp + pos;
 
+  /* Check the bytes of the char * are all in valid memory */
   if (!is_valid_memory (str_ptr, sizeof (char *)))
     exit (-1);
 
@@ -450,6 +462,7 @@ get_arg_string (void *esp, int pos, int limit)
   return *str_ptr;
 }
 
+/* Returns whether bytes starting at START are in valid user space */
 static bool 
 is_valid_memory (void *start, unsigned size)
 {
@@ -478,6 +491,7 @@ is_valid_address (const void *vaddr)
                        && pagedir_get_page (thread_current ()->pagedir, vaddr);
 }
 
+/* Retunrs whether FD is between 0 and MAX_FILES */
 static bool
 is_valid_fd (int fd) {
   return fd >= 0 && fd < MAX_FILES;
