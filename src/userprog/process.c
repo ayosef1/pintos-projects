@@ -106,7 +106,8 @@ start_process (void *args_)
    exception), returns -1.  If TID is invalid or if it was not a
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
-   immediately, without waiting. */
+   immediately, without waiting. Frees the child exit information
+   if */
 int
 process_wait (tid_t child_tid) 
 {
@@ -119,21 +120,23 @@ process_wait (tid_t child_tid)
 
   for (e = list_begin (children); e != list_end (children); e = list_next (e))
     {
-      struct child_process *cur_child;
+      struct child_exit_info *cur_child;
 
-      cur_child = list_entry (e, struct child_process, child_elem);
+      cur_child = list_entry (e, struct child_exit_info, child_elem);
       if (cur_child->tid == child_tid)
       {
-        sema_down (&cur_child->exit_status_ready);
+        /* Wait for child */
+        sema_down (&cur_child->exited);
         int status = cur_child->exit_status;
 
         list_remove (&cur_child->child_elem);
 
-        lock_acquire (&cur_child->lock);
-        int refs = --(cur_child->ref_count);
-        lock_release (&cur_child->lock);
+        lock_acquire (&cur_child->refs_lock);
+        int ref_cnt = --(cur_child->refs_cnt);
+        lock_release (&cur_child->refs_lock);
 
-        if (refs == 0)
+        /* Whichever is the last to decrement refs */
+        if (ref_cnt == 0)
           palloc_free_page (cur_child);
 
         return status;
@@ -152,24 +155,27 @@ process_exit (void)
   uint32_t *pd;
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
-  cur->self->exit_status = cur->exit_status;
-  sema_up (&cur->self->exit_status_ready);
+  cur->exit_info->exit_status = cur->exit_status;
+  sema_up (&cur->exit_info->exited);
 
-  lock_acquire (&cur->self->lock);
-  int ref = --(cur->self->ref_count);
-  lock_release (&cur->self->lock);
+  lock_acquire (&cur->exit_info->refs_lock);
+  int ref = --(cur->exit_info->refs_cnt);
+  lock_release (&cur->exit_info->refs_lock);
   if (ref == 0)
-    palloc_free_page (cur->self);
+    palloc_free_page (cur->exit_info);
 
-  /* Free child structs. */
+  /* Remove children and free the child exit information if child
+     has exited already */
   while (!list_empty (&cur->children))
      {
        struct list_elem *e = list_pop_front (&cur->children);
-       struct child_process *cp = list_entry (e, struct child_process, child_elem);
-       lock_acquire (&cp->lock);
-       int ref = --(cp->ref_count);
-       lock_release (&cp->lock);
-       if (ref == 0)
+       struct child_exit_info *cp = list_entry (e, struct child_exit_info, 
+                                              child_elem);
+       lock_acquire (&cp->refs_lock);
+       int refs_cnt = --(cp->refs_cnt);
+       lock_release (&cp->refs_lock);
+
+       if (refs_cnt== 0)
         palloc_free_page (cp);
      }
 

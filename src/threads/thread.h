@@ -42,16 +42,20 @@ typedef int tid_t;
 /* Reserved file descriptor for process executable */
 #define EXEC_FD 1
 
-struct child_process
+/* A child processes exit information stored in the parents list of
+   children. Allocated when a child process is created, it is
+   destroyed by whichever exits first parent or child (refs_cnt = 0).
+   Child stores it with a pointer */
+struct child_exit_info
     {
         tid_t tid;                              /* Child's tid. */
         int exit_status;                        /* Child's exit status. */
-        struct semaphore exit_status_ready;     /* Sync for waiting parent to
+        struct semaphore exited;                /* Sync for waiting parent to
                                                    get exit status of child. */
         struct list_elem child_elem;            /* List element for per thread
                                                    children list. */
-        int ref_count;
-        struct lock lock;
+        int refs_cnt;                           /* Number of references */   
+        struct lock refs_lock;                  /* Lock to access refs_cnt */
     };
     
 /* A kernel thread or user process.
@@ -113,45 +117,42 @@ struct child_process
 
 struct thread
   {
-    /* Owned by thread.c. */
-    tid_t tid;                          /* Thread identifier. */
-    enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
-    uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Effective Priority. */
-    int original_priority;              /* Non-donated Priority. */
-    int niceness;                       /* Nice value. */
-    int64_t wake_time;                  /* Time at which thread should wake
-                                           after being put to sleep. */
-    bool recent_cpu_changed;            /* Had recent_cpu change since last
-                                           priority change */
-    fixed_point recent_cpu_time;        /* Exponentially weighted moving 
-                                           average of recent CPU time. */
-    struct semaphore *wake_sema;        /* Used to indicate sleeping thread 
-                                           should wake up. */
-    struct list_elem sleep_elem;        /* List element for sleeping threads
-                                           list. */
-    struct list_elem allelem;           /* List element for all threads list. */
+   /* Owned by thread.c. */
+   tid_t tid;                          /* Thread identifier. */
+   enum thread_status status;          /* Thread state. */
+   char name[16];                      /* Name (for debugging purposes). */
+   uint8_t *stack;                     /* Saved stack pointer. */
+   int priority;                       /* Effective Priority. */
+   int original_priority;              /* Non-donated Priority. */
+   int niceness;                       /* Nice value. */
+   int64_t wake_time;                  /* Time at which thread should wake
+                                          after being put to sleep. */
+   bool recent_cpu_changed;            /* Had recent_cpu change since last
+                                          priority change */
+   fixed_point recent_cpu_time;        /* Exponentially weighted moving 
+                                          average of recent CPU time. */
+   struct semaphore *wake_sema;        /* Used to indicate sleeping thread 
+                                          should wake up. */
+   struct list_elem sleep_elem;        /* List element for sleeping threads
+                                          list. */
+   struct list_elem allelem;           /* List element for all threads list. */
 
-    /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+   /* Shared between thread.c and synch.c. */
+   struct list_elem elem;              /* List element. */
 
-    struct list locks_held;             /* List of locks held by this thread. */
-    struct lock *waiting_lock;          /* Lock we are waiting for (if any). */
+   struct list locks_held;             /* List of locks held by this thread. */
+   struct lock *waiting_lock;          /* Lock we are waiting for (if any). */
+
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                          /* Page directory. */
-    int next_fd;                                /* Smallest available fd. */
-    int exit_status;                            /* Exit status of thread. */
-    struct list children;                       /* List of child structs. */
-    struct list_elem children_elem;             /* List element for per thread
-                                                   children list */
-   //  struct semaphore exit_status_ready;         /* Sync for waiting parent to
-   //                                                 get exit status of child */
-   //  struct semaphore exit_status_received;      /* Sync for child to exit after
-   //                                                 parent gets exit status */
-   struct file *fdtable[MAX_FILES];             /* File Descriptor Table. */
-   struct child_process *self;                  /* TODO:*/
+      /* Owned by userprog/process.c. */
+      uint32_t *pagedir;                  /* Page directory. */
+      int next_fd;                        /* Smallest available fd. */
+      int exit_status;                    /* Exit status of thread. */
+      struct list children;               /* List of children's exit 
+                                             information. */
+      struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
+      struct child_exit_info *exit_info;  /* Thread's exit information shared 
+                                             with parent. */
 #endif
 
     /* Owned by thread.c. */

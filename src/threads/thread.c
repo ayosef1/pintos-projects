@@ -632,23 +632,28 @@ init_thread (struct thread *t, const char *name, int priority)
   intr_set_level (old_level);
 }
 
+/* Initializes the exit information associated with child thread
+   T, adds it to the parent thread's children list and adds it to
+   the child T */
 static bool
 init_child (struct thread *t)
 {
   if (t != initial_thread)
-  {
-    struct child_process *cp = palloc_get_page (0);
-    if (cp == NULL)
-      return false;
-    cp->tid = t->tid;
-    cp->exit_status = 0;
-    sema_init (&cp->exit_status_ready, 0);
-    lock_init (&cp->lock);
-    /* Both parent and child have ref to child struct. */
-    cp->ref_count = 2;
-    list_push_back (&thread_current ()->children, &cp->child_elem);
-    t->self = cp;
-  }
+    {
+      struct child_exit_info *exit_info = palloc_get_page (0);
+      if (exit_info == NULL)
+        return false;
+
+      exit_info->tid = t->tid;
+      exit_info->exit_status = 0;
+      sema_init (&exit_info->exited, 0);
+      lock_init (&exit_info->refs_lock);
+      /* Both parent and child have ref to child struct. */
+      exit_info->refs_cnt = 2;
+
+      list_push_back (&thread_current ()->children, &exit_info->child_elem);
+      t->exit_info = exit_info;
+    }
   return true;
 }
 
