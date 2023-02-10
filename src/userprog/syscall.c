@@ -204,19 +204,18 @@ sys_open (uint32_t *esp)
   ret = cur->next_fd;
   cur->fdtable[ret] = fp;
   
-  int new_fd = STDOUT_FILENO + 1;
+  /* Find next available fd */
+  int new_fd = EXEC_FD + 1;
   for (; new_fd < MAX_FILES; new_fd++) 
     {
       if (cur->fdtable[new_fd] == NULL)
       {
         cur->next_fd = new_fd;
-        break;
+        return ret;
       }
     }
 
-  if (new_fd == MAX_FILES)
-    cur->next_fd = -1;
-  
+  cur->next_fd = -1;
   return ret;
 
 }
@@ -274,9 +273,9 @@ sys_read (uint32_t *esp)
         struct thread *cur = thread_current ();
         struct file *fp = cur->fdtable[fd];
 
-        if (fp == NULL) {
+        if (fp == NULL)
           return -1;
-        }
+
         lock_acquire (&filesys_lock);
         bytes_read = file_read(fp, buffer, size);
         lock_release (&filesys_lock);
@@ -285,7 +284,7 @@ sys_read (uint32_t *esp)
   return bytes_read;
 }
 
-#define BUF_MAX 512;          /* Max bytes to write to console in one call */
+#define BUF_MAX 512           /* Max bytes to write to console in one call */
 
 static int
 sys_write (uint32_t *esp)
@@ -309,23 +308,24 @@ sys_write (uint32_t *esp)
       int remaining = size;
       while (remaining > 0)
         {
-          putbuf (buffer, size);
-          remaining -= BUF_MAX;
+          int to_write = remaining > BUF_MAX ? BUF_MAX : remaining;
+          putbuf (buffer, to_write);
+          remaining -= to_write;
         }
       bytes_written = size;
     }
   else 
-  {
-    struct thread *cur = thread_current ();
-    struct file *fp = cur->fdtable[fd];
+    {
+      struct thread *cur = thread_current ();
+      struct file *fp = cur->fdtable[fd];
 
-    if (fp == NULL) 
-      return -1;
+      if (fp == NULL) 
+        return -1;
 
-    lock_acquire (&filesys_lock);
-    bytes_written = file_write(fp, buffer, size);
-    lock_release (&filesys_lock);
-  }
+      lock_acquire (&filesys_lock);
+      bytes_written = file_write(fp, buffer, size);
+      lock_release (&filesys_lock);
+    }
 
   return bytes_written;
 }
@@ -451,10 +451,9 @@ get_arg_string (void *esp, int pos, int limit)
       
     }
   
-  /* Null indicates that filename
-     is either empty or too long. */
+  /* Either empty string of greater than LIMIT */
   if (cur == *str_ptr || cur == end)
-    *str_ptr = NULL;
+    return NULL;
   
   return *str_ptr;
 }
