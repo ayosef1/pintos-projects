@@ -152,15 +152,15 @@ struct thread
    struct lock *waiting_lock;          /* Lock we are waiting for (if any). */
 
 #ifdef USERPROG
-      /* Owned by userprog/process.c. */
-      uint32_t *pagedir;                  /* Page directory. */
-      int next_fd;                        /* Smallest available fd. */
-      int exit_status;                    /* Exit status of thread. */
-      struct list children;               /* List of children's exit 
-                                             information. */
-      struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
-      struct child_exit_info *exit_info;  /* Thread's exit information shared 
-                                             with parent. */
+   /* Owned by userprog/process.c. */
+   uint32_t *pagedir;                  /* Page directory. */
+   int next_fd;                        /* Smallest available fd. */
+   int exit_status;                    /* Exit status of thread. */
+   struct list children;               /* List of children's exit 
+                                          information. */
+   struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
+   struct child_exit_info *exit_info;  /* Thread's exit information shared with
+                                          parent. */
 #endif
 
     /* Owned by thread.c. */

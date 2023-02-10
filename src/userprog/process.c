@@ -124,23 +124,23 @@ process_wait (tid_t child_tid)
 
       cur_child = list_entry (e, struct child_exit_info, child_elem);
       if (cur_child->tid == child_tid)
-      {
-        /* Wait for child */
-        sema_down (&cur_child->exited);
-        int status = cur_child->exit_status;
+        {
+          /* Wait for child */
+          sema_down (&cur_child->exited);
+          int status = cur_child->exit_status;
 
-        list_remove (&cur_child->child_elem);
+          list_remove (&cur_child->child_elem);
 
-        lock_acquire (&cur_child->refs_lock);
-        int ref_cnt = --(cur_child->refs_cnt);
-        lock_release (&cur_child->refs_lock);
+          lock_acquire (&cur_child->refs_lock);
+          int ref_cnt = --(cur_child->refs_cnt);
+          lock_release (&cur_child->refs_lock);
 
-        /* Whichever is the last to decrement refs */
-        if (ref_cnt == 0)
-          palloc_free_page (cur_child);
+          /* Whichever is the last to decrement refs */
+          if (ref_cnt == 0)
+            palloc_free_page (cur_child);
 
-        return status;
-      }
+          return status;
+        }
     }
   return TID_ERROR;
 }
@@ -582,10 +582,10 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
     return false;
 
   if (padding)
-  {
-    *esp -= padding;
-    memset (*esp, 0, padding);
-  }
+    {
+      *esp -= padding;
+      memset (*esp, 0, padding);
+    }
 
   /* Push Null Pointer Sentinel as required by C standard */
   *esp -= WORD_SIZE;
@@ -593,10 +593,10 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
 
   /* Push arguments in reverse order */
   for (int i = argc - 1; i >= 0; i--) 
-  {
-    PUSH_STACK(esp);
-    memcpy (*esp, &argv[i], WORD_SIZE);
-  }
+    {
+      PUSH_STACK(esp);
+      memcpy (*esp, &argv[i], WORD_SIZE);
+    }
 
   palloc_free_page (argv);
 
