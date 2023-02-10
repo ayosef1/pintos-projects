@@ -16,16 +16,6 @@ struct process_arg
         struct semaphore loaded_sema;   /* Ensure parent waits for child 
                                            to load. */
     };
-
-struct child_process
-    {
-        tid_t tid;                              /* Child's tid. */
-        int exit_status;                        /* Child's exit status. */
-        struct semaphore exit_status_ready;     /* Sync for waiting parent to
-                                                   get exit status of child. */
-        struct list_elem child_elem;            /* List element for per thread
-                                                   children list. */
-    };
 tid_t process_execute (const char *file_name);
 int process_wait (tid_t);
 void process_exit (void);
