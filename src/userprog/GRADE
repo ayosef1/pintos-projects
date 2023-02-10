@@ -1,3 +1,10 @@
+cd build && make grade
+make[1]: Entering directory '/afs/.ir.stanford.edu/users/a/y/ayosef/CS212/cs212pintos/src/userprog/build'
+../../tests/make-grade ../.. results ../../tests/userprog/Grading | tee grade
+warning: test tests/userprog/exec-bound-3 doesn't count for grading
+warning: test tests/userprog/exec-bound-2 doesn't count for grading
+warning: test tests/userprog/exec-bound doesn't count for grading
+warning: test tests/userprog/sc-boundary-3 doesn't count for grading
 TOTAL TESTING SCORE: 100.0%
 ALL TESTED PASSED -- PERFECT SCORE
 
@@ -159,3 +166,5 @@ Functionality of base file system (tests/filesys/base/Rubric):
 	- Section summary.
 	     13/ 13 tests passed
 	     30/ 30 points subtotal
+
+make[1]: Leaving directory '/afs/.ir.stanford.edu/users/a/y/ayosef/CS212/cs212pintos/src/userprog/build'

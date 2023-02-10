@@ -326,9 +326,6 @@ load (struct process_arg *args, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-
-  
-
   lock_acquire(&filesys_lock);
   file = filesys_open (args->exec_name);
 
