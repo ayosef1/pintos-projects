@@ -42,10 +42,18 @@ typedef int tid_t;
 /* Reserved file descriptor for process executable */
 #define EXEC_FD 1
 
-/* A child processes exit information stored in the parents list of
-   children. Allocated when a child process is created, it is
-   destroyed by whichever exits first parent or child (refs_cnt = 0).
-   Child stores it with a pointer */
+/* The shared child exit information used to synchronize exiting between
+   child and parent as well as communicate the child exit status to the
+   parent. The parent stores it as an element in its `children` list. The
+   child stores a pointer to it in its member `exit_info`.
+   
+   The TID is the child's TID, used by parent in wait to find correct child.
+   The EXIT_STATUS is where the child stores its exit status and then signals
+   the waiting parent through EXITED that it can read the EXIT STATUS.
+   The CHILD_ELEM is an element in the parent's `children` list.
+
+   The REFS_LOCK and REFS_CNT are used to determine which of child and parent
+   exited first and so which should free the shared data structure. */
 struct child_exit_info
     {
         tid_t tid;                              /* Child's tid. */
