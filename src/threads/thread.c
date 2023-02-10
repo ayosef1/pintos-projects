@@ -80,6 +80,7 @@ static struct thread *next_thread_to_run (void);
 static struct thread *highest_priority_ready (void);
 static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
+static bool init_child (struct thread *t);
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
@@ -233,7 +234,9 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
-
+  #ifdef USERPROG
+    init_child (t);
+  #endif
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -617,13 +620,8 @@ init_thread (struct thread *t, const char *name, int priority)
     t->fdtable[RESERVED_FD] = THREAD_MAGIC;
     /* First two FDs reserved */
     t->next_fd = EXEC_FD + 1;
-      
+  
     list_init (&t->children);
-    sema_init (&t->exit_status_ready, 0);
-    sema_init (&t->exit_status_received, 0);
-
-    if (t != initial_thread)
-      list_push_back (&thread_current ()->children, &t->children_elem);
   #endif
 
   /* Initialize the list of locks held by current list*/
@@ -632,6 +630,25 @@ init_thread (struct thread *t, const char *name, int priority)
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+}
+
+static bool
+init_child (struct thread *t)
+{
+  if (t != initial_thread)
+  {
+    // list_push_back (&thread_current ()->children, &t->children_elem);
+    struct child_process *cp = palloc_get_page (0);
+    if (cp == NULL)
+      return false;
+    cp->tid = t->tid;
+    cp->exit_status = 0;
+    sema_init (&cp->exit_status_ready, 0);
+    list_push_back (&thread_current ()->children, &cp->child_elem);
+
+    t->self = cp;
+  }
+  return true;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
