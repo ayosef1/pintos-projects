@@ -55,7 +55,7 @@ syscall_handler (struct intr_frame *f)
 {
   uint32_t syscall_num;
 
-  if (!is_valid_memory (f->esp, sizeof(char *)))
+  if (!is_valid_address (f->esp))
     exit (-1);
 
   syscall_num = get_arg_int(f->esp, 0);
@@ -109,7 +109,6 @@ void
 exit (int status)
 {
   thread_current ()->exit_status = status;
-
   thread_exit ();
 }
 
@@ -152,54 +151,56 @@ sys_wait (uint32_t *esp)
 bool
 sys_create (uint32_t *esp)
 {
+  bool ret;
   char *fname;
   off_t initial_size;
-  bool ret = false;
 
   fname = get_arg_string (esp, 1, NAME_MAX);
+  if (fname == NULL)
+    return false;
 
-  if (fname != NULL)
-  {
-    initial_size = get_arg_int (esp, 2);
-    lock_acquire (&filesys_lock);
-    ret = filesys_create (fname, initial_size);
-    lock_release (&filesys_lock);
-  }
+  initial_size = get_arg_int (esp, 2);
+  lock_acquire (&filesys_lock);
+  ret = filesys_create (fname, initial_size);
+  lock_release (&filesys_lock);
   return ret;
 }
 
 bool
 sys_remove (uint32_t *esp)
 {
-  bool ret = false;
-  char *fname = get_arg_string (esp, 1, NAME_MAX);
+  bool ret;
+  char *fname;
+  
+  fname = get_arg_string (esp, 1, NAME_MAX);
+  if (fname == NULL)
+    return false;
 
-  if (fname != NULL)
-  {
-    lock_acquire (&filesys_lock);
-    ret = filesys_remove (fname);
-    lock_release (&filesys_lock);
-  }
+  lock_acquire (&filesys_lock);
+  ret = filesys_remove (fname);
+  lock_release (&filesys_lock);
   return ret;
 }
 
 int
 sys_open (uint32_t *esp)
 {
-  int ret = -1;
-  char *fname = get_arg_string (esp, 1, NAME_MAX);
-  struct thread *cur = thread_current ();
+  int ret;
+  char *fname;
+  struct thread *cur;
 
+  fname = get_arg_string (esp, 1, NAME_MAX);
   if (fname == NULL)
-    return ret;
+    return -1;
 
   lock_acquire (&filesys_lock);
   struct file *fp = filesys_open (fname);
   lock_release (&filesys_lock);
 
+  cur = thread_current ();
   /* File open unsuccessful or file limit hit */
   if (fp == NULL || cur->next_fd < 0)
-    return ret;
+    return -1;
 
   ret = cur->next_fd;
   cur->fdtable[ret] = fp;
@@ -232,7 +233,6 @@ sys_filesize (uint32_t *esp)
     exit (-1);
   
   struct file *file = thread_current ()->fdtable[fd];
-
 	if (file == NULL)
 		exit (-1);
   

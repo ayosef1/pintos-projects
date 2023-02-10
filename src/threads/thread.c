@@ -237,7 +237,8 @@ thread_create (const char *name, int priority,
 
   /* Initialize thread's child struct if applicable. */
   #ifdef USERPROG
-    init_child (t);
+    if (!init_child (t))
+      return TID_ERROR;
   #endif
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -634,7 +635,9 @@ init_thread (struct thread *t, const char *name, int priority)
 
 /* Initializes the exit information associated with child thread
    T, adds it to the parent thread's children list and adds it to
-   the child T */
+   the child T. Returns true if successful, including case where
+   t is initial thread and requires no set up. Otherwise, returns 
+   false if palloc_get_page fails. */
 static bool
 init_child (struct thread *t)
 {
@@ -648,7 +651,8 @@ init_child (struct thread *t)
       exit_info->exit_status = 0;
       sema_init (&exit_info->exited, 0);
       lock_init (&exit_info->refs_lock);
-      /* Both parent and child have ref to child struct. */
+
+      /* Both parent and child have a pointer to this child struct. */
       exit_info->refs_cnt = 2;
 
       list_push_back (&thread_current ()->children, &exit_info->child_elem);

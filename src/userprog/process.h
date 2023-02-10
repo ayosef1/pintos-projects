@@ -7,15 +7,15 @@
 
 /* Argument passed into the thread function start_process when a child
    thread is created in process_execute (). Process execute does initial
-   parsing so stores executable name EXEC_NAME as well as pointer SAVE_PTR
+   parsing so stores executable name 'exec_name' as well as pointer 'save_ptr'
    to rest of the command line.
    
-   PAGE is a pointer to the temporary buffer on which command line is stored
-   so child process can free it.
+   Member 'page' is a pointer to the temporary buffer on which the command line 
+   is stored, allowing the child process to free it.
    
-   LOADED used to return load status of child back to parent and LOADED_SEMA
-   to synchronize parent return from process_execute () and child completing
-   load. */
+   Member 'loaded' is used to return load status of child back to parent and 
+   'loaded_sema' synchronizes parent process with loading child to ensure that 
+   parent waits to find out if child successfully loaded. */
 struct process_arg 
     {
         char *exec_name;                /* Name of executable. */

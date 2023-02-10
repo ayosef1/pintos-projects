@@ -135,7 +135,7 @@ process_wait (tid_t child_tid)
           int ref_cnt = --(cur_child->refs_cnt);
           lock_release (&cur_child->refs_lock);
 
-          /* Whichever is the last to decrement refs */
+          /* Parent must free this shared memory if child already exited. */
           if (ref_cnt == 0)
             palloc_free_page (cur_child);
 
@@ -164,20 +164,21 @@ process_exit (void)
   if (ref == 0)
     palloc_free_page (cur->exit_info);
 
-  /* Remove children and free the child exit information if child
-     has exited already */
+  /* Iterate through child processes' child exit info structs and
+     decrement the reference count since parent is exiting. Free 
+     this shared memory if the child process already exited. */
   while (!list_empty (&cur->children))
-     {
-       struct list_elem *e = list_pop_front (&cur->children);
-       struct child_exit_info *cp = list_entry (e, struct child_exit_info, 
-                                              child_elem);
-       lock_acquire (&cp->refs_lock);
-       int refs_cnt = --(cp->refs_cnt);
-       lock_release (&cp->refs_lock);
+    {
+      struct list_elem *e = list_pop_front (&cur->children);
+      struct child_exit_info *cp = list_entry (e, struct child_exit_info, 
+                                            child_elem);
+      lock_acquire (&cp->refs_lock);
+      int refs_cnt = --(cp->refs_cnt);
+      lock_release (&cp->refs_lock);
 
-       if (refs_cnt== 0)
+      if (refs_cnt== 0)
         palloc_free_page (cp);
-     }
+    }
 
   /* Close all file descriptors. */
   for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
@@ -544,13 +545,16 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
   bool success = false;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
+  if (kpage == NULL)
+    return false;
+
+  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  if (success)
+    *esp = PHYS_BASE;
+  else
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        palloc_free_page (kpage);
+      palloc_free_page (kpage);
+      return false;
     }
 
   void * start_height = *esp;

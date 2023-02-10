@@ -96,7 +96,7 @@ The second advantage is a better abstraction of the kernel. The kernel is a
 low level interface with the hardware that abstracts this unsafe interaction
 away from applications. The shell on the other hand is an application,
 one layer of abstraction above the kernel. The tokenization of a command, which
-is directly passed to the shell therefore is much more alligned with the layer
+is directly passed to the shell therefore is much more aligned with the layer
 of abstraction that the shell provides. Once a verified command has been parsed
 then it makes sense to pass to the kernel to execute the command. The shell
 can then store the remaining arguments and pass them to the kernel later as
@@ -178,7 +178,7 @@ Allocation happens by choosing the lowest unused file descriptor by that
 process. Note that fds 0 and 1 are reserved to be given to the user so as not
 to be confused with STDIN and STDOUT. On the thread side, 0 is never
 used and 1 is used to store the thread's executable file. When a process closes
-a file, the assocaited file descriptor is free to be used again.
+a file, the associated file descriptor is free to be used again.
 
 This abstraction is implemented through a array of file pointers called a
 file descriptor table. Each fd refers to the index in the file
@@ -200,7 +200,7 @@ fails, it immediately returns -1.
 Otherwise, if the fd is STDIN or STDOUT, for read and write respectively, 
 it reads from / writes to the console, returning only when successfully 
 completing the entire read / write. Writes to the console are limited to 512
-bytes at a time so as to interleave with other outputs to the console.
+bytes at a time so as to not interleave with other outputs to the console.
 
 Otherwise, the code gets the relevant file pointer from the thread's fd
 table, acquires the filesystem lock and performs the relevant action with the
@@ -215,45 +215,50 @@ returns bytes read / written.
 >> for improvement in these numbers, and how much?
 
 We assume that the `file` that is to be written to has been opened already
-and that we consider the number of inspections of the page table during a
-call to write after the stack pointer has been validated. 
+and that we begin couting inspections from the call of the syscall handler.
 
-Irrespective of the number of bytes in the buffer, we first need to check that
-each byte of the args is in valid user space. This requires at minimum 3
+Our first is through an inspection of the stack pointer. After that irrespective 
+of the number of bytes in the buffer, we first need to check that
+each byte of the sysycall number and then args is in valid user space. In our
+implementation we individually validate each of these and so requires minimum 4
 inspections if all args are in a single page. However, if one  argument spans
-two pages then this will require 2 inspections for this arg and 4 in total.
+two pages then this will require 2 inspections for this arg and 5 in total.
 
 Next we check every byte in the buffer is in valid user space. We do this by
 verifying that each page that the buffer bytes occupy is valid and designated
-to the user. Since each page is exactly 4kB, both 4kB data dn 2B data can span
-one or two pages. Therefore we have a minimum for 1 inspection and a maximum
+to the user. Technically, any data we'll encounter in syscalls with a size 
+greater than one byte can span up to two pages (the largest data we can 
+encounter in syscall is a command line string of length 128), as seen on the
+exec-bound tests. Therefore we have a minimum for 1 inspection and a maximum
 of 2 for the buffer bytes.
 
-Therefore in total for both 2B and 4kB of user data we have a mimimum of 
-3+1 = 4 inspections and a maximum of 4+2 = 6 inspections. As a note, if the
-first argument spanned two pages and the second page was invalid, there would
-only be 2 inspections.
+For data of size greater than 1 byte, we therefore have a mimimum of 4+1 = 5 
+inspections and a maximum of 5+2 = 7 inspections. As a note, if the first 
+argument spanned two pages and the second page was invalid, there would only be 
+2 inspections.
 
 Rooms for improvement can really only come by reducing our checks for the args.
 Instead of checking each argument individually we could check whether they
-collectively occupy valid user space. Since arguments theoretically can occupy
-at most 12 bytes (3 args), this would means argument checking would at require
-1-2 checks depending on whether they span several pages (reducing number of
-checks by 2). We did not implement this because it complicates the interface
-for parsing string arguments whose length is unknown.
+collectively occupy valid user space. Since syscall number and arguments 
+occupy at most 16 bytes (4 words), this would means argument checking would at
+require 1-2 checks depending on whether they span several pages (reducing number
+of checks by 2). We did not do this because we wanted to both validate the
+memory where pointer args were and the memory that they point to in a single
+helper function. With this implementation it would mean we would have to
+separate these.
 
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
 
-The wait system call looks through its list the shared children exit 
-information to see if the TID matches any of them. If it doesn't it returns an
-error, otherwise it blocks on the semaphore inside this struct waiting for the,
-child to signal that it is ready to exit. It then collects the child's exit 
-status and signal the child that it can exit.
-
-On the other side, when a process exits, it sets its exit status in its shared
-exit information signals to corresponding semaphore to wake up the parent if 
-its waiting.
+When wait is called, the parent looks through its children list, which contains 
+children exit information structs that are shared between the parent and child
+to find the struct that corresponds to the child with the provided TID. If the
+parent doesn't find this struct, it does not have a child process with the 
+provided TID and returns an error. If it does find the struct, the parent will 
+block on the semaphore inside the struct, waiting for the child to exit. When 
+the child is exiting, it writes its exit status to the struct and signals the 
+parent to wake up; after which, the child proceeds to clean up resources and 
+terminate.
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -285,8 +290,7 @@ we know the size) and strings (where we don't know the size). Not knowing the
 length of the string makes this a particularly difficult task so abstracting
 this into its own function clears up a lot of scope for obfuscation. For both
 buffers and strings, these functions return NULL for a non fatal issue and exit
-for a fatal error. The NULL return makes it clear in the control flow what
-went wrong.
+for a fatal error.
 
 There are also a number of checks that are not generalizable and must take
 place inside each of the system call handlers. For example, control flow based
@@ -300,7 +304,7 @@ ______________________________
 
 To ensure freeing of resouces after an error, we ensure all termination passes
 through the same cleanup function (namely `process_exit` which is accessed
-through `thread_exit`). Here all locks are released andfiles closed. Described
+through `thread_exit`). Here all locks are released and files closed. Described
 more in detail in B8, the `refs_count` and corresponding `refs_lock` in the
 shared data structure `child_exit_info` means that the last process to exit
 will free the memory associated with the shared DS, irrespective whether from 
@@ -315,12 +319,16 @@ freed by the call to `pagedir_destory`.
 >> loading.  How does your code ensure this?  How is the load
 >> success/failure status passed back to the thread that calls "exec"?
 
-We added a a semaphore `loaded_sema` to struct thread. Each parents when
-making a call to exec (and therefore process_execute) has to wait for the
-child to signal them using this semaphore that they have completed loading.
-Before the child signals the parent, it sets its member `loaded`. Therefore the
-parent can check the `loaded` member once it has been signaled to decided how
-to return from exec.
+Before a parent calls thread_create, it initializes a struct called process_arg 
+that contains auxillary data necessary for creating the child process. Notably,
+this struct has a semaphore called `loaded_sema` and a bool `loaded`. 
+
+Each parent when making a call to exec (and therefore process_execute) has to 
+wait for the newly created child to signal this semaphore that they have 
+completed loading. The parent then checks `loaded` flag, set by the child 
+before signalling to tell the parent whether the load was successful. If the 
+load was succesful it returns -1, otherwise it returns the allocated 
+TID (one-to-one mapping with PID).
 
 >> B8: Consider parent process P with child process C.  How do you
 >> ensure proper synchronization and avoid race conditions when P
@@ -331,33 +339,46 @@ to return from exec.
 
 There are two key pieces of synchronization between parent P and child C.
 Both of these exists in a shared data structure `child_exit_info` that is freed
-by whichever processes exits first. The data structure is stored in the 
-`children` list in the parent, and the child stores a pointer to it. This DS
-allows for the child to share its exit_status to the parent without
-concern about which exited first.
+by whichever processes exits last. The parent has a reference to this data 
+structure in its children list, which is really a list of its child processes'
+`child_exit_info` data structures. Moreover, the child process has a reference 
+to the shared data structure in its members. This DS allows for the child to 
+share its exit_status to the parent without concern about the order in which 
+they exit.
 
 The first sync is a semaphore in the shared child exit information. This is 
-used for sync between a waiting parent and its child. This sema is signaled 
-while the child is exiting, after it sets the exit status in the shared child
-data structure. Only after this has been signaled does the parent
-read the exit status and return from wait. If the parent calls wait first, it
-blocks until the child signals. If the child exits before the call, the parent
-doens't block when it calls `sema_down` and can just return immediately.
+used to sync a waiting parent and its child. This sema is signaled while the 
+child is exiting, specifically after it sets the exit status in the shared 
+child data structure. Only after this has been signaled does the parent read 
+the exit status, remove the corresponding `child_exit_info` from its children 
+list, and return from wait. If the parent calls wait first, it blocks 
+until the child signals. If the child exits before the call, the parent doens't 
+block when it calls `sema_down` and can just return immediately.
 
 The second piece of synchronization is a lock that protects a ref count. The
 ref count, as the name suggests, is the number of references to the shared data
 structure. This acts as a proxy for both the parent and child to determine
 whether the other has exited or not. Initialized to 2, both child and parent
-decrement the ref count when they stop using the shared data structure. For a
-child this is when it exits. For a parent, this is after it has been signaled
-by its child in a call ot wait or when it terminates without waiting. In all
-these cases, the process, decrements the ref count and reads its value. After
-decrementing if ref count is 1, this means that the other process is still alive
-and it needs to special action. If it is 0, this means that the other process
-has reached the decrement first and so it is responsible for freeing the shared
-data structure. This ref count allows for the shared data sturcture as it
-ensures the strucutre is freed no matter how child and parent exit and it what
-order.
+decrement the ref count when they stop using the shared data structure. 
+
+A parent can decrement the ref counts of its child process' `child_exit_info` 
+in two places. Firstly, it can do so in wait, where we decrement the ref count 
+of the `child_exit_info` of the child it's waiting on. The second is when the 
+parent is exiting, during which it decrements the the ref count of all of its 
+child processes' `child_exit_info` structs in its children list. These are all 
+the children the parent do not wait on. Meanwhile, a child decrements the ref 
+count of its corresponding `child_exit_info` ref count when exiting. 
+
+
+After a process decrements the ref count of a `child_exit_info`, the ref count 
+can be either 0 or 1. If the ref count is 1, this means that the other process 
+has not indicated it no longer needs access to the `child_exit_info`, and that 
+the current process should not free the shared data structure. Otherwise, if 
+the ref count is 0, the other process has already indicated it no longer needs 
+to access the shared data structure, meaning hat the current process is 
+responsible for freeing the shared data structure. The ref count allows for use 
+of the shared data sturcture as it ensures the structure is freed no matter how 
+child and parent exit and in what order.
 
 The only edge cases there could be is an interleaving of exits between child
 and non waiting parent. To deal with this instance, we have a simple policy
@@ -384,22 +405,34 @@ that results from an illegal access.
 The advantages of the design is in its ease of performing file operations. 
 The file descriptor table as a static array of file pointers means that the
 file descriptor can be the index into this array to access the corresponding
-file pointer. Similarly finding the next free file descriptor is O(n) operation. 
-static array of file pointers makes finding the file corresponding to a file
-descriptor and O(1) operation. Similarly, finding the next free file descriptor
-is an O(n) operation. It also has advantages for processes that are opening
-and closing files frequently, there isn't any overhead for allocating and
+file pointer. Thus, retreiving the file pointer using the file descriptor is an 
+O(1) operation. Also, we are able retreive the next available file descriptor 
+very easily in O(1) time since we store this as a member of the thread struct. 
+
+As for updating the next available file descriptor, this takes place in open 
+and close. In close, this is an O(1) operation since we just compare the file 
+descriptor we close to the existing next available file descriptor. However, in 
+open, updating the next file available file descriptor is an O(n) operation 
+because we have to iterate though the table to find the new smallest file 
+descriptor not associated with a file.
+
+Our implementation also has advantages for processes that are opening and 
+closing files frequently, there isn't any overhead for allocating and 
 deallocating fds e.g. creating list elements and removing from a list.
 
-The key disadvantage is in staticness and expensive memory. The table occupies
-128 * pointer size of bytes. However, user processes could vary greatly and 
-this implementation risks allocating too much space. In the less common case of
-more than 128 file descriptors, it does not having the flexibility to accomodate
-for them. A final disadvantage is the confusing 0th and 1st entry in the file
-descriptor. Since these can't be allocated (reserved for STDIN and STDOUT),
-the second is repurposed to store a process' executable file pointer. While
-making use of unused space, this is a hacky approach and might not be clear
-to a third party reading the codebase.
+The key disadvantages lie in its staticness and therefore expensive memory. 
+The table occupies 128 * sizeof(pointer size). Since pointers have a size of 4 
+bytes, each thread reserves 512 bytes for its file descriptor table in its 
+members. Since user processes can vary greatly, this implementation risks 
+allocating too much space. In the rare event that a process wants to use more 
+than 126 file descriptors, this implementation does not having the flexibility 
+to accomodate for them. 
+
+A final disadvantage is the confusing 0th and 1st entry in the file descriptor. 
+Since these can't be allocated (reserved for STDIN and STDOUT), the second is 
+repurposed to store a process' executable file pointer. While making use of 
+unused space, this is a hacky approach and might not be clear to a third party 
+reading the codebase.
 
 >> B11: The default tid_t to pid_t mapping is the identity mapping.
 >> If you changed it, what advantages are there to your approach?

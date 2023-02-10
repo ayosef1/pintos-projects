@@ -47,23 +47,31 @@ typedef int tid_t;
    parent. The parent stores it as an element in its `children` list. The
    child stores a pointer to it in its member `exit_info`.
    
-   The TID is the child's TID, used by parent in wait to find correct child.
-   The EXIT_STATUS is where the child stores its exit status and then signals
-   the waiting parent through EXITED that it can read the EXIT STATUS.
-   The CHILD_ELEM is an element in the parent's `children` list.
-
-   The REFS_LOCK and REFS_CNT are used to determine which of child and parent
-   exited first and so which should free the shared data structure. */
+   The 'tid' is the child's TID, used by parent in wait to find correct child.
+   When a child exits, it stores its exit status in member 'exit_status' and 
+   then signals its potentially waiting parent through 'exited' that it can 
+   read the 'exit_status' has been updated. 
+   
+   The 'refs_lock' and 'refs_cnt' are useful for freeing this shared data
+   structure. Either both or one of the parent and child can have a pointer to
+   the struct at a given time. Using 'refs_cnt', the procress currently
+   accessing this shared memory (either the child or parent) knows if it is the
+   last to do so in which case it would eventually free the shared data
+   structure. 
+   
+   Finally, the 'elem' member allows a parent process to keep track of its
+   child processes by maintaining a list of child_exit_info structs. */
 struct child_exit_info
     {
         tid_t tid;                              /* Child's tid. */
         int exit_status;                        /* Child's exit status. */
         struct semaphore exited;                /* Sync for waiting parent to
                                                    get exit status of child. */
-        struct list_elem child_elem;            /* List element for per thread
+        int refs_cnt;                           /* Number of references to the
+                                                   the struct. */   
+        struct lock refs_lock;                  /* Lock to access refs_cnt. */
+        struct list_elem child_elem;            /* List element for parent's
                                                    children list. */
-        int refs_cnt;                           /* Number of references */   
-        struct lock refs_lock;                  /* Lock to access refs_cnt */
     };
     
 /* A kernel thread or user process.
