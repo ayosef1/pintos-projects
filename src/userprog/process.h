@@ -9,9 +9,12 @@
    parsed arguments and pointer to remaining arguments */
 struct process_arg 
     {
-        char *exec_name;            /* Name of executable */
-        char *save_ptr;             /* Save ptr from tokenizing exec */
-        char *page;                 /* Page on which cmd_line storage */
+        char *exec_name;                /* Name of executable */
+        char *save_ptr;                 /* Save ptr from tokenizing exec */
+        char *page;                     /* Page on which cmd_line storage */
+        bool loaded;                    /* Child loaded successfully */
+        struct semaphore loaded_sema;   /* Ensure parent waits for child 
+                                           to load. */
     };
 
 tid_t process_execute (const char *file_name);

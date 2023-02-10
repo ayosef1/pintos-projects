@@ -32,6 +32,7 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
+  struct process_arg args;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -44,34 +45,19 @@ process_execute (const char *file_name)
   char *save_ptr;
   token = strtok_r(fn_copy, " ", &save_ptr);
 
-  struct process_arg args = { token, save_ptr, fn_copy };
 
+  args.exec_name = token;
+  args.save_ptr = save_ptr;
+  args.page = fn_copy;
+  args.loaded = false;
+  sema_init (&args.loaded_sema, 0);
+  
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (token, PRI_DEFAULT, start_process, &args);
 
-  /* Ugly way of making sure parent waits for child to load. */
-  struct thread *target_child = NULL;
-  struct list *children = &thread_current ()->children;
-  struct list_elem *e;
+  sema_down (&args.loaded_sema);
 
-  for (e = list_begin (children); e != list_end (children); e = list_next (e))
-    {
-      struct thread *cur_child;
-
-      cur_child = list_entry (e, struct thread, children_elem);
-      if (cur_child->tid == tid)
-      {
-        target_child = cur_child;
-        break;
-      }
-    }
-  
-  if (!target_child)
-    return TID_ERROR;
-  
-  sema_down (&target_child->loaded_sema);
-  
-  if (!target_child->loaded)
+  if (!args.loaded)
     return TID_ERROR;
 
   return tid;
@@ -94,8 +80,8 @@ start_process (void *args_)
   success = load (args, &if_.eip, &if_.esp);
 
   /* Inform parent of load status. */
-  thread_current ()->loaded = success;
-  sema_up (&thread_current ()->loaded_sema);
+  args->loaded = success;
+  sema_up (&args->loaded_sema);
 
   /* If load failed, quit. */
   palloc_free_page (args->page);
@@ -293,7 +279,7 @@ struct Elf32_Phdr
 /* Pushes a word at SRC to the minimal stack pointed to by *ESP */
 #define PUSH_STACK(ESP) *ESP -= WORD_SIZE
 
-static bool setup_stack (void **esp, struct process_arg *args);
+static bool setup_stack (void **esp, char *exec_name, char *save_ptr);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -406,7 +392,7 @@ load (struct process_arg *args, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp, args))
+  if (!setup_stack (esp, args->exec_name, args->save_ptr))
     goto done;
   
   /* Start address. */
@@ -533,7 +519,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp, struct process_arg *args) 
+setup_stack (void **esp, char *exec_name, char *save_ptr) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -558,8 +544,8 @@ setup_stack (void **esp, struct process_arg *args)
     return false;
 
   int argc = 0;
-  for (char *token = args->exec_name; token != NULL;
-      token = strtok_r (NULL, " ", &args->save_ptr))
+  for (char *token = exec_name; token != NULL;
+      token = strtok_r (NULL, " ", &save_ptr))
     {
       size_t length = strlen (token) + 1;
       *esp -= length;
