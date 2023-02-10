@@ -220,7 +220,7 @@ index fb63cf3..4c47b44 100644
                            PRI_MIN, PRI_MAX);
  
 diff --git a/src/threads/thread.h b/src/threads/thread.h
-index b19ae89..58526a7 100644
+index b19ae89..3bee846 100644
 --- a/src/threads/thread.h
 +++ b/src/threads/thread.h
 @@ -5,6 +5,7 @@
@@ -333,15 +333,15 @@ index b19ae89..58526a7 100644
  #ifdef USERPROG
 -    /* Owned by userprog/process.c. */
 -    uint32_t *pagedir;                  /* Page directory. */
-+      /* Owned by userprog/process.c. */
-+      uint32_t *pagedir;                  /* Page directory. */
-+      int next_fd;                        /* Smallest available fd. */
-+      int exit_status;                    /* Exit status of thread. */
-+      struct list children;               /* List of children's exit 
-+                                             information. */
-+      struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
-+      struct child_exit_info *exit_info;  /* Thread's exit information shared 
-+                                             with parent. */
++   /* Owned by userprog/process.c. */
++   uint32_t *pagedir;                  /* Page directory. */
++   int next_fd;                        /* Smallest available fd. */
++   int exit_status;                    /* Exit status of thread. */
++   struct list children;               /* List of children's exit 
++                                          information. */
++   struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
++   struct child_exit_info *exit_info;  /* Thread's exit information shared with
++                                          parent. */
  #endif
  
      /* Owned by thread.c. */
@@ -800,6 +800,173 @@ index 0000000..70b6613
 +>> students, either for future quarters or the remaining projects?
 +
 +>> Any other comments?
+diff --git a/src/userprog/GRADE b/src/userprog/GRADE
+new file mode 100644
+index 0000000..8b8b7eb
+--- /dev/null
++++ b/src/userprog/GRADE
+@@ -0,0 +1,161 @@
++TOTAL TESTING SCORE: 100.0%
++ALL TESTED PASSED -- PERFECT SCORE
++
++- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
++
++SUMMARY BY TEST SET
++
++Test Set                                      Pts Max  % Ttl  % Max
++--------------------------------------------- --- --- ------ ------
++tests/userprog/Rubric.functionality           108/108  35.0%/ 35.0%
++tests/userprog/Rubric.robustness               88/ 88  25.0%/ 25.0%
++tests/userprog/no-vm/Rubric                     1/  1  10.0%/ 10.0%
++tests/filesys/base/Rubric                      30/ 30  30.0%/ 30.0%
++--------------------------------------------- --- --- ------ ------
++Total                                                 100.0%/100.0%
++
++- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
++
++SUMMARY OF INDIVIDUAL TESTS
++
++Functionality of system calls (tests/userprog/Rubric.functionality):
++	- Test argument passing on Pintos command line.
++	     3/ 3 tests/userprog/args-none
++	     3/ 3 tests/userprog/args-single
++	     3/ 3 tests/userprog/args-multiple
++	     3/ 3 tests/userprog/args-many
++	     3/ 3 tests/userprog/args-dbl-space
++
++	- Test "create" system call.
++	     3/ 3 tests/userprog/create-empty
++	     3/ 3 tests/userprog/create-long
++	     3/ 3 tests/userprog/create-normal
++	     3/ 3 tests/userprog/create-exists
++
++	- Test "open" system call.
++	     3/ 3 tests/userprog/open-missing
++	     3/ 3 tests/userprog/open-normal
++	     3/ 3 tests/userprog/open-twice
++
++	- Test "read" system call.
++	     3/ 3 tests/userprog/read-normal
++	     3/ 3 tests/userprog/read-zero
++
++	- Test "write" system call.
++	     3/ 3 tests/userprog/write-normal
++	     3/ 3 tests/userprog/write-zero
++
++	- Test "close" system call.
++	     3/ 3 tests/userprog/close-normal
++
++	- Test "exec" system call.
++	     5/ 5 tests/userprog/exec-once
++	     5/ 5 tests/userprog/exec-multiple
++	     5/ 5 tests/userprog/exec-arg
++
++	- Test "wait" system call.
++	     5/ 5 tests/userprog/wait-simple
++	     5/ 5 tests/userprog/wait-twice
++
++	- Test "exit" system call.
++	     5/ 5 tests/userprog/exit
++
++	- Test "halt" system call.
++	     3/ 3 tests/userprog/halt
++
++	- Test recursive execution of user programs.
++	    15/15 tests/userprog/multi-recurse
++
++	- Test read-only executable feature.
++	     3/ 3 tests/userprog/rox-simple
++	     3/ 3 tests/userprog/rox-child
++	     3/ 3 tests/userprog/rox-multichild
++
++	- Section summary.
++	     28/ 28 tests passed
++	    108/108 points subtotal
++
++Robustness of system calls (tests/userprog/Rubric.robustness):
++	- Test robustness of file descriptor handling.
++	     2/ 2 tests/userprog/close-stdin
++	     2/ 2 tests/userprog/close-stdout
++	     2/ 2 tests/userprog/close-bad-fd
++	     2/ 2 tests/userprog/close-twice
++	     2/ 2 tests/userprog/read-bad-fd
++	     2/ 2 tests/userprog/read-stdout
++	     2/ 2 tests/userprog/write-bad-fd
++	     2/ 2 tests/userprog/write-stdin
++	     2/ 2 tests/userprog/multi-child-fd
++
++	- Test robustness of pointer handling.
++	     3/ 3 tests/userprog/create-bad-ptr
++	     3/ 3 tests/userprog/exec-bad-ptr
++	     3/ 3 tests/userprog/open-bad-ptr
++	     3/ 3 tests/userprog/read-bad-ptr
++	     3/ 3 tests/userprog/write-bad-ptr
++
++	- Test robustness of buffer copying across page boundaries.
++	     3/ 3 tests/userprog/create-bound
++	     3/ 3 tests/userprog/open-boundary
++	     3/ 3 tests/userprog/read-boundary
++	     3/ 3 tests/userprog/write-boundary
++
++	- Test handling of null pointer and empty strings.
++	     2/ 2 tests/userprog/create-null
++	     2/ 2 tests/userprog/open-null
++	     2/ 2 tests/userprog/open-empty
++
++	- Test robustness of system call implementation.
++	     3/ 3 tests/userprog/sc-bad-arg
++	     3/ 3 tests/userprog/sc-bad-sp
++	     5/ 5 tests/userprog/sc-boundary
++	     5/ 5 tests/userprog/sc-boundary-2
++
++	- Test robustness of "exec" and "wait" system calls.
++	     5/ 5 tests/userprog/exec-missing
++	     5/ 5 tests/userprog/wait-bad-pid
++	     5/ 5 tests/userprog/wait-killed
++
++	- Test robustness of exception handling.
++	     1/ 1 tests/userprog/bad-read
++	     1/ 1 tests/userprog/bad-write
++	     1/ 1 tests/userprog/bad-jump
++	     1/ 1 tests/userprog/bad-read2
++	     1/ 1 tests/userprog/bad-write2
++	     1/ 1 tests/userprog/bad-jump2
++
++	- Section summary.
++	     34/ 34 tests passed
++	     88/ 88 points subtotal
++
++Functionality of features that VM might break (tests/userprog/no-vm/Rubric):
++
++	     1/ 1 tests/userprog/no-vm/multi-oom
++
++	- Section summary.
++	      1/  1 tests passed
++	      1/  1 points subtotal
++
++Functionality of base file system (tests/filesys/base/Rubric):
++	- Test basic support for small files.
++	     1/ 1 tests/filesys/base/sm-create
++	     2/ 2 tests/filesys/base/sm-full
++	     2/ 2 tests/filesys/base/sm-random
++	     2/ 2 tests/filesys/base/sm-seq-block
++	     3/ 3 tests/filesys/base/sm-seq-random
++
++	- Test basic support for large files.
++	     1/ 1 tests/filesys/base/lg-create
++	     2/ 2 tests/filesys/base/lg-full
++	     2/ 2 tests/filesys/base/lg-random
++	     2/ 2 tests/filesys/base/lg-seq-block
++	     3/ 3 tests/filesys/base/lg-seq-random
++
++	- Test synchronized multiprogram access to files.
++	     4/ 4 tests/filesys/base/syn-read
++	     4/ 4 tests/filesys/base/syn-write
++	     2/ 2 tests/filesys/base/syn-remove
++
++	- Section summary.
++	     13/ 13 tests passed
++	     30/ 30 points subtotal
 diff --git a/src/userprog/exception.c b/src/userprog/exception.c
 index 19aca12..4a90879 100644
 --- a/src/userprog/exception.c
@@ -813,7 +980,7 @@ index 19aca12..4a90879 100644
  
      case SEL_KCSEG:
 diff --git a/src/userprog/process.c b/src/userprog/process.c
-index c0e5215..c18e160 100644
+index c0e5215..96559ce 100644
 --- a/src/userprog/process.c
 +++ b/src/userprog/process.c
 @@ -5,9 +5,11 @@
@@ -935,23 +1102,23 @@ index c0e5215..c18e160 100644
 +
 +      cur_child = list_entry (e, struct child_exit_info, child_elem);
 +      if (cur_child->tid == child_tid)
-+      {
-+        /* Wait for child */
-+        sema_down (&cur_child->exited);
-+        int status = cur_child->exit_status;
++        {
++          /* Wait for child */
++          sema_down (&cur_child->exited);
++          int status = cur_child->exit_status;
 +
-+        list_remove (&cur_child->child_elem);
++          list_remove (&cur_child->child_elem);
 +
-+        lock_acquire (&cur_child->refs_lock);
-+        int ref_cnt = --(cur_child->refs_cnt);
-+        lock_release (&cur_child->refs_lock);
++          lock_acquire (&cur_child->refs_lock);
++          int ref_cnt = --(cur_child->refs_cnt);
++          lock_release (&cur_child->refs_lock);
 +
-+        /* Whichever is the last to decrement refs */
-+        if (ref_cnt == 0)
-+          palloc_free_page (cur_child);
++          /* Whichever is the last to decrement refs */
++          if (ref_cnt == 0)
++            palloc_free_page (cur_child);
 +
-+        return status;
-+      }
++          return status;
++        }
 +    }
 +  return TID_ERROR;
  }
@@ -1136,10 +1303,10 @@ index c0e5215..c18e160 100644
 +    return false;
 +
 +  if (padding)
-+  {
-+    *esp -= padding;
-+    memset (*esp, 0, padding);
-+  }
++    {
++      *esp -= padding;
++      memset (*esp, 0, padding);
++    }
 +
 +  /* Push Null Pointer Sentinel as required by C standard */
 +  *esp -= WORD_SIZE;
@@ -1147,10 +1314,10 @@ index c0e5215..c18e160 100644
 +
 +  /* Push arguments in reverse order */
 +  for (int i = argc - 1; i >= 0; i--) 
-+  {
-+    PUSH_STACK(esp);
-+    memcpy (*esp, &argv[i], WORD_SIZE);
-+  }
++    {
++      PUSH_STACK(esp);
++      memcpy (*esp, &argv[i], WORD_SIZE);
++    }
 +
 +  palloc_free_page (argv);
 +
@@ -1206,10 +1373,10 @@ index 688cd2a..f2075c5 100644
  void process_exit (void);
 diff --git a/src/userprog/proj2_diff b/src/userprog/proj2_diff
 new file mode 100644
-index 0000000..d675130
+index 0000000..4c012fc
 --- /dev/null
 +++ b/src/userprog/proj2_diff
-@@ -0,0 +1,1198 @@
+@@ -0,0 +1,1319 @@
 +diff --git a/src/.gitignore b/src/.gitignore
 +index 0ab34c0..b2d9c2e 100644
 +--- a/src/.gitignore
@@ -1432,7 +1599,7 @@ index 0000000..d675130
 +                           PRI_MIN, PRI_MAX);
 + 
 +diff --git a/src/threads/thread.h b/src/threads/thread.h
-+index b19ae89..58526a7 100644
++index b19ae89..3bee846 100644
 +--- a/src/threads/thread.h
 ++++ b/src/threads/thread.h
 +@@ -5,6 +5,7 @@
@@ -1545,15 +1712,15 @@ index 0000000..d675130
 + #ifdef USERPROG
 +-    /* Owned by userprog/process.c. */
 +-    uint32_t *pagedir;                  /* Page directory. */
-++      /* Owned by userprog/process.c. */
-++      uint32_t *pagedir;                  /* Page directory. */
-++      int next_fd;                        /* Smallest available fd. */
-++      int exit_status;                    /* Exit status of thread. */
-++      struct list children;               /* List of children's exit 
-++                                             information. */
-++      struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
-++      struct child_exit_info *exit_info;  /* Thread's exit information shared 
-++                                             with parent. */
+++   /* Owned by userprog/process.c. */
+++   uint32_t *pagedir;                  /* Page directory. */
+++   int next_fd;                        /* Smallest available fd. */
+++   int exit_status;                    /* Exit status of thread. */
+++   struct list children;               /* List of children's exit 
+++                                          information. */
+++   struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
+++   struct child_exit_info *exit_info;  /* Thread's exit information shared with
+++                                          parent. */
 + #endif
 + 
 +     /* Owned by thread.c. */
@@ -2012,6 +2179,173 @@ index 0000000..d675130
 ++>> students, either for future quarters or the remaining projects?
 ++
 ++>> Any other comments?
++diff --git a/src/userprog/GRADE b/src/userprog/GRADE
++new file mode 100644
++index 0000000..8b8b7eb
++--- /dev/null
+++++ b/src/userprog/GRADE
++@@ -0,0 +1,161 @@
+++TOTAL TESTING SCORE: 100.0%
+++ALL TESTED PASSED -- PERFECT SCORE
+++
+++- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+++
+++SUMMARY BY TEST SET
+++
+++Test Set                                      Pts Max  % Ttl  % Max
+++--------------------------------------------- --- --- ------ ------
+++tests/userprog/Rubric.functionality           108/108  35.0%/ 35.0%
+++tests/userprog/Rubric.robustness               88/ 88  25.0%/ 25.0%
+++tests/userprog/no-vm/Rubric                     1/  1  10.0%/ 10.0%
+++tests/filesys/base/Rubric                      30/ 30  30.0%/ 30.0%
+++--------------------------------------------- --- --- ------ ------
+++Total                                                 100.0%/100.0%
+++
+++- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+++
+++SUMMARY OF INDIVIDUAL TESTS
+++
+++Functionality of system calls (tests/userprog/Rubric.functionality):
+++	- Test argument passing on Pintos command line.
+++	     3/ 3 tests/userprog/args-none
+++	     3/ 3 tests/userprog/args-single
+++	     3/ 3 tests/userprog/args-multiple
+++	     3/ 3 tests/userprog/args-many
+++	     3/ 3 tests/userprog/args-dbl-space
+++
+++	- Test "create" system call.
+++	     3/ 3 tests/userprog/create-empty
+++	     3/ 3 tests/userprog/create-long
+++	     3/ 3 tests/userprog/create-normal
+++	     3/ 3 tests/userprog/create-exists
+++
+++	- Test "open" system call.
+++	     3/ 3 tests/userprog/open-missing
+++	     3/ 3 tests/userprog/open-normal
+++	     3/ 3 tests/userprog/open-twice
+++
+++	- Test "read" system call.
+++	     3/ 3 tests/userprog/read-normal
+++	     3/ 3 tests/userprog/read-zero
+++
+++	- Test "write" system call.
+++	     3/ 3 tests/userprog/write-normal
+++	     3/ 3 tests/userprog/write-zero
+++
+++	- Test "close" system call.
+++	     3/ 3 tests/userprog/close-normal
+++
+++	- Test "exec" system call.
+++	     5/ 5 tests/userprog/exec-once
+++	     5/ 5 tests/userprog/exec-multiple
+++	     5/ 5 tests/userprog/exec-arg
+++
+++	- Test "wait" system call.
+++	     5/ 5 tests/userprog/wait-simple
+++	     5/ 5 tests/userprog/wait-twice
+++
+++	- Test "exit" system call.
+++	     5/ 5 tests/userprog/exit
+++
+++	- Test "halt" system call.
+++	     3/ 3 tests/userprog/halt
+++
+++	- Test recursive execution of user programs.
+++	    15/15 tests/userprog/multi-recurse
+++
+++	- Test read-only executable feature.
+++	     3/ 3 tests/userprog/rox-simple
+++	     3/ 3 tests/userprog/rox-child
+++	     3/ 3 tests/userprog/rox-multichild
+++
+++	- Section summary.
+++	     28/ 28 tests passed
+++	    108/108 points subtotal
+++
+++Robustness of system calls (tests/userprog/Rubric.robustness):
+++	- Test robustness of file descriptor handling.
+++	     2/ 2 tests/userprog/close-stdin
+++	     2/ 2 tests/userprog/close-stdout
+++	     2/ 2 tests/userprog/close-bad-fd
+++	     2/ 2 tests/userprog/close-twice
+++	     2/ 2 tests/userprog/read-bad-fd
+++	     2/ 2 tests/userprog/read-stdout
+++	     2/ 2 tests/userprog/write-bad-fd
+++	     2/ 2 tests/userprog/write-stdin
+++	     2/ 2 tests/userprog/multi-child-fd
+++
+++	- Test robustness of pointer handling.
+++	     3/ 3 tests/userprog/create-bad-ptr
+++	     3/ 3 tests/userprog/exec-bad-ptr
+++	     3/ 3 tests/userprog/open-bad-ptr
+++	     3/ 3 tests/userprog/read-bad-ptr
+++	     3/ 3 tests/userprog/write-bad-ptr
+++
+++	- Test robustness of buffer copying across page boundaries.
+++	     3/ 3 tests/userprog/create-bound
+++	     3/ 3 tests/userprog/open-boundary
+++	     3/ 3 tests/userprog/read-boundary
+++	     3/ 3 tests/userprog/write-boundary
+++
+++	- Test handling of null pointer and empty strings.
+++	     2/ 2 tests/userprog/create-null
+++	     2/ 2 tests/userprog/open-null
+++	     2/ 2 tests/userprog/open-empty
+++
+++	- Test robustness of system call implementation.
+++	     3/ 3 tests/userprog/sc-bad-arg
+++	     3/ 3 tests/userprog/sc-bad-sp
+++	     5/ 5 tests/userprog/sc-boundary
+++	     5/ 5 tests/userprog/sc-boundary-2
+++
+++	- Test robustness of "exec" and "wait" system calls.
+++	     5/ 5 tests/userprog/exec-missing
+++	     5/ 5 tests/userprog/wait-bad-pid
+++	     5/ 5 tests/userprog/wait-killed
+++
+++	- Test robustness of exception handling.
+++	     1/ 1 tests/userprog/bad-read
+++	     1/ 1 tests/userprog/bad-write
+++	     1/ 1 tests/userprog/bad-jump
+++	     1/ 1 tests/userprog/bad-read2
+++	     1/ 1 tests/userprog/bad-write2
+++	     1/ 1 tests/userprog/bad-jump2
+++
+++	- Section summary.
+++	     34/ 34 tests passed
+++	     88/ 88 points subtotal
+++
+++Functionality of features that VM might break (tests/userprog/no-vm/Rubric):
+++
+++	     1/ 1 tests/userprog/no-vm/multi-oom
+++
+++	- Section summary.
+++	      1/  1 tests passed
+++	      1/  1 points subtotal
+++
+++Functionality of base file system (tests/filesys/base/Rubric):
+++	- Test basic support for small files.
+++	     1/ 1 tests/filesys/base/sm-create
+++	     2/ 2 tests/filesys/base/sm-full
+++	     2/ 2 tests/filesys/base/sm-random
+++	     2/ 2 tests/filesys/base/sm-seq-block
+++	     3/ 3 tests/filesys/base/sm-seq-random
+++
+++	- Test basic support for large files.
+++	     1/ 1 tests/filesys/base/lg-create
+++	     2/ 2 tests/filesys/base/lg-full
+++	     2/ 2 tests/filesys/base/lg-random
+++	     2/ 2 tests/filesys/base/lg-seq-block
+++	     3/ 3 tests/filesys/base/lg-seq-random
+++
+++	- Test synchronized multiprogram access to files.
+++	     4/ 4 tests/filesys/base/syn-read
+++	     4/ 4 tests/filesys/base/syn-write
+++	     2/ 2 tests/filesys/base/syn-remove
+++
+++	- Section summary.
+++	     13/ 13 tests passed
+++	     30/ 30 points subtotal
 +diff --git a/src/userprog/exception.c b/src/userprog/exception.c
 +index 19aca12..4a90879 100644
 +--- a/src/userprog/exception.c
@@ -2025,7 +2359,7 @@ index 0000000..d675130
 + 
 +     case SEL_KCSEG:
 +diff --git a/src/userprog/process.c b/src/userprog/process.c
-+index c0e5215..c18e160 100644
++index c0e5215..96559ce 100644
 +--- a/src/userprog/process.c
 ++++ b/src/userprog/process.c
 +@@ -5,9 +5,11 @@
@@ -2147,23 +2481,23 @@ index 0000000..d675130
 ++
 ++      cur_child = list_entry (e, struct child_exit_info, child_elem);
 ++      if (cur_child->tid == child_tid)
-++      {
-++        /* Wait for child */
-++        sema_down (&cur_child->exited);
-++        int status = cur_child->exit_status;
+++        {
+++          /* Wait for child */
+++          sema_down (&cur_child->exited);
+++          int status = cur_child->exit_status;
 ++
-++        list_remove (&cur_child->child_elem);
+++          list_remove (&cur_child->child_elem);
 ++
-++        lock_acquire (&cur_child->refs_lock);
-++        int ref_cnt = --(cur_child->refs_cnt);
-++        lock_release (&cur_child->refs_lock);
+++          lock_acquire (&cur_child->refs_lock);
+++          int ref_cnt = --(cur_child->refs_cnt);
+++          lock_release (&cur_child->refs_lock);
 ++
-++        /* Whichever is the last to decrement refs */
-++        if (ref_cnt == 0)
-++          palloc_free_page (cur_child);
+++          /* Whichever is the last to decrement refs */
+++          if (ref_cnt == 0)
+++            palloc_free_page (cur_child);
 ++
-++        return status;
-++      }
+++          return status;
+++        }
 ++    }
 ++  return TID_ERROR;
 + }
@@ -2348,10 +2682,10 @@ index 0000000..d675130
 ++    return false;
 ++
 ++  if (padding)
-++  {
-++    *esp -= padding;
-++    memset (*esp, 0, padding);
-++  }
+++    {
+++      *esp -= padding;
+++      memset (*esp, 0, padding);
+++    }
 ++
 ++  /* Push Null Pointer Sentinel as required by C standard */
 ++  *esp -= WORD_SIZE;
@@ -2359,55 +2693,9 @@ index 0000000..d675130
 ++
 ++  /* Push arguments in reverse order */
 ++  for (int i = argc - 1; i >= 0; i--) 
-++  {
-++    PUSH_STACK(esp);
-++    memcpy (*esp, &argv[i], WORD_SIZE);
-++  }
-++
-++  palloc_free_page (argv);
-++
-++  /* Push address of argv */
-++  void *first_arg_addr = *esp;
-++  PUSH_STACK(esp);
-++  memcpy (*esp, &first_arg_addr, WORD_SIZE);
-++
-++  /* Push argc */
-++  PUSH_STACK(esp);
-++  memcpy(*esp, &argc, WORD_SIZE);
-++
-++  /* Push fake pointer */
-++  *esp -= WORD_SIZE;
-++  memset(*esp, 0, WORD_SIZE);
-++
-+   return success;
-+ }
-+ 
-+diff --git a/src/userprog/process.h b/src/userprog/process.h
-+index 688cd2a..f2075c5 100644
-+--- a/src/userprog/process.h
-++++ b/src/userprog/process.h
-+@@ -3,6 +3,29 @@
-+ 
-+ #include "threads/thread.h"
-+ 
-++#define WORD_SIZE sizeof (void *)       /* Word size for use by stack setup. */
-++
-++/* Argument passed into the thread function start_process when a child
-++   thread is created in process_execute (). Process execute does initial
-++   parsing so stores executable name EXEC_NAME as well as pointer SAVE_PTR
-++   to rest of the command line.
-++   
-++   PAGE is a pointer to the temporary buffer on which command line is stored
-++   so child process can free it.
-++   
-++   LOADED used to return load status of child back to parent and LOADED_SEMA
-++   to synchronize parent return from process_execute () and child completing
-++   load. */
-++struct process_arg 
 ++    {
-++        char *exec_name;                /* Name of executable. */
-++        char *save_ptr;                 /* Save ptr from tokenizing cmd line. */
-++        char *page;                     
+++      PUSH_STACK(esp);
+++   
 \ No newline at end of file
 diff --git a/src/userprog/syscall.c b/src/userprog/syscall.c
 index 370c89b..c3f64b8 100644
