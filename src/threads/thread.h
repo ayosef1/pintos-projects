@@ -131,8 +131,6 @@ struct thread
     uint32_t *pagedir;                          /* Page directory. */
     int next_fd;                                /* Smallest available fd. */
     int exit_status;                            /* Exit status of thread. */
-    bool loaded;                                /* Thread loaded executable
-                                                   and stack successfully */
     struct list children;                       /* List of child structs. */
     struct list_elem children_elem;             /* List element for per thread
                                                    children list */
@@ -140,10 +138,6 @@ struct thread
                                                    get exit status of child */
     struct semaphore exit_status_received;      /* Sync for child to exit after
                                                    parent gets exit status */
-
-    struct semaphore loaded_sema;               /* Sync for child loading and
-                                                   returning child tid from
-                                                   exec syscall */
    struct file *fdtable[MAX_FILES];             /* File Descriptor Table. */
 #endif
 
