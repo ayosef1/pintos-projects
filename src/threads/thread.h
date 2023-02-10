@@ -134,11 +134,12 @@ struct thread
     struct list children;                       /* List of child structs. */
     struct list_elem children_elem;             /* List element for per thread
                                                    children list */
-    struct semaphore exit_status_ready;         /* Sync for waiting parent to
-                                                   get exit status of child */
-    struct semaphore exit_status_received;      /* Sync for child to exit after
-                                                   parent gets exit status */
+   //  struct semaphore exit_status_ready;         /* Sync for waiting parent to
+   //                                                 get exit status of child */
+   //  struct semaphore exit_status_received;      /* Sync for child to exit after
+   //                                                 parent gets exit status */
    struct file *fdtable[MAX_FILES];             /* File Descriptor Table. */
+   struct child_process *self;                  /* TODO:*/
 #endif
 
     /* Owned by thread.c. */

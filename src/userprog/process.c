@@ -110,6 +110,7 @@ start_process (void *args_)
 int
 process_wait (tid_t child_tid) 
 {
+  // timer_sleep (10);
   struct thread *parent;
   struct list *children;
   struct list_elem *e;
@@ -119,20 +120,18 @@ process_wait (tid_t child_tid)
 
   for (e = list_begin (children); e != list_end (children); e = list_next (e))
     {
-      struct thread *cur_child;
+      struct child_process *cur_child;
 
-      cur_child = list_entry (e, struct thread, children_elem);
+      cur_child = list_entry (e, struct child_process, child_elem);
       if (cur_child->tid == child_tid)
       {
-        list_remove (&cur_child->children_elem);
-
+        list_remove (&cur_child->child_elem);
         sema_down (&cur_child->exit_status_ready);
         int status = cur_child->exit_status;
-        sema_up (&cur_child->exit_status_received);
+        palloc_free_page (cur_child);
         return status;
       }
     }
-  
   return TID_ERROR;
 }
 
@@ -146,6 +145,8 @@ process_exit (void)
   uint32_t *pd;
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
+  cur->self->exit_status = cur->exit_status;
+
 
   /* Close all file descriptors. */
   for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
@@ -166,14 +167,21 @@ process_exit (void)
       lock_release (l);
     }
   
-  /* Signal about to be orphaned children so they don't wait on exited
-     parent */
-  for (e = list_begin (&cur->children); e != list_end (&cur->children);
-       e = list_next (e))
-    {
-      struct thread *child = list_entry (e, struct thread, children_elem);
-      sema_up (&child->exit_status_received);
-    }
+  /* Free children structs. If orphans, let initial process adopt them. */
+  while (!list_empty (&cur->children))
+     {
+       struct list_elem *e = list_pop_front (&cur->children);
+       struct child_process *cp = list_entry (e, struct child_process, child_elem);
+       palloc_free_page (cp);
+     }
+  // /* Signal about to be orphaned children so they don't wait on exited
+  //    parent */
+  // for (e = list_begin (&cur->children); e != list_end (&cur->children);
+  //      e = list_next (e))
+  //   {
+  //     struct thread *child = list_entry (e, struct thread, children_elem);
+  //     sema_up (&child->exit_status_received);
+  //   }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -191,10 +199,7 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  
-  /* Signal to parent and wait until they receive exit status */
-  sema_up (&cur->exit_status_ready);
-  sema_down (&cur->exit_status_received);
+  sema_up (&cur->self->exit_status_ready);
 }
 
 /* Sets up the CPU for running user code in the current
