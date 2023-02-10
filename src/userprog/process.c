@@ -110,7 +110,6 @@ start_process (void *args_)
 int
 process_wait (tid_t child_tid) 
 {
-  // timer_sleep (10);
   struct thread *parent;
   struct list *children;
   struct list_elem *e;
@@ -125,10 +124,18 @@ process_wait (tid_t child_tid)
       cur_child = list_entry (e, struct child_process, child_elem);
       if (cur_child->tid == child_tid)
       {
-        list_remove (&cur_child->child_elem);
         sema_down (&cur_child->exit_status_ready);
         int status = cur_child->exit_status;
-        palloc_free_page (cur_child);
+
+        list_remove (&cur_child->child_elem);
+
+        lock_acquire (&cur_child->lock);
+        int refs = --(cur_child->ref_count);
+        lock_release (&cur_child->lock);
+
+        if (refs == 0)
+          palloc_free_page (cur_child);
+
         return status;
       }
     }
@@ -146,7 +153,25 @@ process_exit (void)
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
   cur->self->exit_status = cur->exit_status;
+  sema_up (&cur->self->exit_status_ready);
 
+  lock_acquire (&cur->self->lock);
+  int ref = --(cur->self->ref_count);
+  lock_release (&cur->self->lock);
+  if (ref == 0)
+    palloc_free_page (cur->self);
+
+  /* Free child structs. */
+  while (!list_empty (&cur->children))
+     {
+       struct list_elem *e = list_pop_front (&cur->children);
+       struct child_process *cp = list_entry (e, struct child_process, child_elem);
+       lock_acquire (&cp->lock);
+       int ref = --(cp->ref_count);
+       lock_release (&cp->lock);
+       if (ref == 0)
+        palloc_free_page (cp);
+     }
 
   /* Close all file descriptors. */
   for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
@@ -166,22 +191,6 @@ process_exit (void)
       struct lock *l = list_entry (e, struct lock, locks_held_elem);
       lock_release (l);
     }
-  
-  /* Free children structs. If orphans, let initial process adopt them. */
-  while (!list_empty (&cur->children))
-     {
-       struct list_elem *e = list_pop_front (&cur->children);
-       struct child_process *cp = list_entry (e, struct child_process, child_elem);
-       palloc_free_page (cp);
-     }
-  // /* Signal about to be orphaned children so they don't wait on exited
-  //    parent */
-  // for (e = list_begin (&cur->children); e != list_end (&cur->children);
-  //      e = list_next (e))
-  //   {
-  //     struct thread *child = list_entry (e, struct thread, children_elem);
-  //     sema_up (&child->exit_status_received);
-  //   }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -199,7 +208,6 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  sema_up (&cur->self->exit_status_ready);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -529,7 +537,6 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
   uint8_t *kpage;
   bool success = false;
 
-  // 64-bit so we don't assume word length
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
@@ -540,7 +547,6 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
         palloc_free_page (kpage);
     }
 
-  // uint64_t to make sure works for all address lengths
   void * start_height = *esp;
 
 
@@ -561,9 +567,8 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
   
   int padding = (size_t) *esp % WORD_SIZE;
 
-  /* Calculate if will overflow 1 page
-      Magic 12 is bytes needed for argc, argv and ret address
-      3 * WORD_SIZE */
+  /* Calculate if will overflow a page. Magic 12 is bytes
+     needed for argc, argv and ret address 3 * WORD_SIZE. */
   uint32_t stack_bytes_needed = (start_height - *esp) +
                                 (WORD_SIZE * argc) + 12 + padding;
   
@@ -576,11 +581,11 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
     memset (*esp, 0, padding);
   }
 
-  /* Push Null Pointer Sentinel as required by C standard*/
+  /* Push Null Pointer Sentinel as required by C standard */
   *esp -= WORD_SIZE;
   memset(*esp, 0, WORD_SIZE);
 
-  /* Push arguments in reverse order*/
+  /* Push arguments in reverse order */
   for (int i = argc - 1; i >= 0; i--) 
   {
     PUSH_STACK(esp);
@@ -589,12 +594,12 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
 
   palloc_free_page (argv);
 
-  /* Push address of argv*/
+  /* Push address of argv */
   void *first_arg_addr = *esp;
   PUSH_STACK(esp);
   memcpy (*esp, &first_arg_addr, WORD_SIZE);
 
-  /* Push argc*/
+  /* Push argc */
   PUSH_STACK(esp);
   memcpy(*esp, &argc, WORD_SIZE);
 

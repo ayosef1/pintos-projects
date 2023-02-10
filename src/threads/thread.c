@@ -234,6 +234,8 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
+  /* Initialize thread's child struct if applicable. */
   #ifdef USERPROG
     init_child (t);
   #endif
@@ -612,12 +614,10 @@ init_thread (struct thread *t, const char *name, int priority)
   }
 
   #ifdef USERPROG
-    /* Default exit status to normal */
     t->exit_status = 0;
-    /* Set all pointers to NULL */
     memset (t->fdtable, 0, sizeof (*t->fdtable));
-    /* Set fd = 0 to invalid ptr */
-    t->fdtable[RESERVED_FD] = THREAD_MAGIC;
+    /* Set fd = 0 to an invalid ptr */
+    t->fdtable[RESERVED_FD] = (void *)THREAD_MAGIC;
     /* First two FDs reserved */
     t->next_fd = EXEC_FD + 1;
   
@@ -637,15 +637,16 @@ init_child (struct thread *t)
 {
   if (t != initial_thread)
   {
-    // list_push_back (&thread_current ()->children, &t->children_elem);
     struct child_process *cp = palloc_get_page (0);
     if (cp == NULL)
       return false;
     cp->tid = t->tid;
     cp->exit_status = 0;
     sema_init (&cp->exit_status_ready, 0);
+    lock_init (&cp->lock);
+    /* Both parent and child have ref to child struct. */
+    cp->ref_count = 2;
     list_push_back (&thread_current ()->children, &cp->child_elem);
-
     t->self = cp;
   }
   return true;

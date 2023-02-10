@@ -61,43 +61,43 @@ syscall_handler (struct intr_frame *f)
   syscall_num = get_arg_int(f->esp, 0);
   switch (syscall_num)
   {
-    case SYS_HALT:                   /* Halt the operating system. */
+    case SYS_HALT:
       sys_halt ();
       break;
-    case SYS_EXIT:                   /* Terminate this process. */
+    case SYS_EXIT:
       sys_exit (f->esp);
       break;
-    case SYS_EXEC:                   /* Start another process. */
+    case SYS_EXEC:
       f->eax = sys_exec (f->esp);
       break;
-    case SYS_WAIT:                   /* Wait for a child process to die. */
+    case SYS_WAIT:
       f->eax = sys_wait (f->esp);
       break;
-    case SYS_CREATE:                 /* Create a file. */
+    case SYS_CREATE:
       f->eax = sys_create (f->esp);
       break;
-    case SYS_REMOVE:                 /* Delete a file. */
+    case SYS_REMOVE:
       f->eax = sys_remove (f->esp);
       break;
-    case SYS_OPEN:                   /* Open a file. */
+    case SYS_OPEN:
       f->eax = sys_open (f->esp);
       break;
-    case SYS_FILESIZE:               /* Obtain a file's size. */
+    case SYS_FILESIZE:
       f->eax = sys_filesize (f->esp);
       break;
-    case SYS_READ:                   /* Read from a file. */
+    case SYS_READ:
       f->eax = sys_read (f->esp);
       break;
-    case SYS_WRITE:                  /* Write to a file. */
+    case SYS_WRITE:
       f->eax = sys_write (f->esp);
       break;
-    case SYS_SEEK:                   /* Change position in a file. */
+    case SYS_SEEK:
       sys_seek (f->esp);
       break;
-    case SYS_TELL:                   /* Report current position in a file. */
+    case SYS_TELL:
       f->eax = sys_tell (f->esp);
       break;
-    case SYS_CLOSE:                  /* Close a file. */
+    case SYS_CLOSE:
       sys_close (f->esp);
       break;
     default:
@@ -109,9 +109,6 @@ void
 exit (int status)
 {
   thread_current ()->exit_status = status;
-  
-  /* We clean everything up in process_exit since we might not 
-     go through here. */
 
   thread_exit ();
 }
@@ -288,7 +285,7 @@ sys_read (uint32_t *esp)
   return bytes_read;
 }
 
-#define BUF_MAX 512;            /* Max bytes to write to console in one call */
+#define BUF_MAX 512;          /* Max bytes to write to console in one call */
 
 static int
 sys_write (uint32_t *esp)
@@ -466,7 +463,6 @@ get_arg_string (void *esp, int pos, int limit)
 static bool 
 is_valid_memory (void *start, unsigned size)
 {
-  /* TODO: depending on operation, might need to double check permissions. */
   uint8_t *cur;
   uint8_t *end;
   unsigned start_offs;
@@ -491,8 +487,9 @@ is_valid_address (void *vaddr)
                        && pagedir_get_page (thread_current ()->pagedir, vaddr);
 }
 
-/* Retunrs whether FD is between 0 and MAX_FILES */
+/* Returns whether FD is between 0 and MAX_FILES */
 static bool
-is_valid_fd (int fd) {
+is_valid_fd (int fd) 
+{
   return fd >= 0 && fd < MAX_FILES;
 }

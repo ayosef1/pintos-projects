@@ -42,6 +42,18 @@ typedef int tid_t;
 /* Reserved file descriptor for process executable */
 #define EXEC_FD 1
 
+struct child_process
+    {
+        tid_t tid;                              /* Child's tid. */
+        int exit_status;                        /* Child's exit status. */
+        struct semaphore exit_status_ready;     /* Sync for waiting parent to
+                                                   get exit status of child. */
+        struct list_elem child_elem;            /* List element for per thread
+                                                   children list. */
+        int ref_count;
+        struct lock lock;
+    };
+    
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
