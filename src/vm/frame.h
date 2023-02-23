@@ -1,5 +1,5 @@
-#ifndef VM_PROCESS_H
-#define VM_PROCESS_H
+#ifndef VM_FRAME_H
+#define VM_FRAME_H
 
 // #include "vm/page.h"
 #include <list.h>
