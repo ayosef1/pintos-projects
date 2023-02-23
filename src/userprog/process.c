@@ -19,6 +19,7 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "vm/frame.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (struct process_arg *arg, void (**eip) (void), void **esp);
@@ -506,14 +507,14 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
+      uint8_t *kpage = frame_get_page (PAL_USER);
       if (kpage == NULL)
         return false;
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
-          palloc_free_page (kpage);
+          frame_free_page (kpage);
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -521,7 +522,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Add the page to the process's address space. */
       if (!install_page (upage, kpage, writable)) 
         {
-          palloc_free_page (kpage);
+          frame_free_page (kpage);
           return false; 
         }
 
@@ -541,7 +542,7 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  kpage = frame_get_page (PAL_USER | PAL_ZERO);
   if (kpage == NULL)
     return false;
 
@@ -550,7 +551,7 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
     *esp = PHYS_BASE;
   else
     {
-      palloc_free_page (kpage);
+      frame_free_page (kpage);
       return false;
     }
 
@@ -590,12 +591,12 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
 
   /* Push Null Pointer Sentinel as required by C standard */
   *esp -= WORD_SIZE;
-  memset(*esp, 0, WORD_SIZE);
+  memset (*esp, 0, WORD_SIZE);
 
   /* Push arguments in reverse order */
   for (int i = argc - 1; i >= 0; i--) 
     {
-      PUSH_STACK(esp);
+      PUSH_STACK (esp);
       memcpy (*esp, &argv[i], WORD_SIZE);
     }
 
@@ -603,16 +604,16 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
 
   /* Push address of argv */
   void *first_arg_addr = *esp;
-  PUSH_STACK(esp);
+  PUSH_STACK (esp);
   memcpy (*esp, &first_arg_addr, WORD_SIZE);
 
   /* Push argc */
   PUSH_STACK(esp);
-  memcpy(*esp, &argc, WORD_SIZE);
+  memcpy (*esp, &argc, WORD_SIZE);
 
   /* Push fake pointer */
   *esp -= WORD_SIZE;
-  memset(*esp, 0, WORD_SIZE);
+  memset (*esp, 0, WORD_SIZE);
 
   return success;
 }
