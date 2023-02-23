@@ -80,6 +80,7 @@ static struct thread *next_thread_to_run (void);
 static struct thread *highest_priority_ready (void);
 static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
+static bool init_child (struct thread *t);
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
@@ -234,6 +235,11 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  /* Initialize thread's child struct if applicable. */
+  #ifdef USERPROG
+    if (!init_child (t))
+      return TID_ERROR;
+  #endif
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -248,7 +254,6 @@ thread_create (const char *name, int priority,
   sf = alloc_frame (t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
-
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -333,6 +338,8 @@ thread_tid (void)
 void
 thread_exit (void) 
 {
+  struct thread *cur = thread_current ();
+
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
@@ -344,7 +351,7 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+  cur->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
 }
@@ -397,7 +404,7 @@ thread_set_priority (int new_priority)
   ASSERT (!intr_context ());
   old_level = intr_disable ();
 
-  struct thread * cur = thread_current ();
+  struct thread *cur = thread_current ();
 
   bool change_priority = cur->original_priority == cur->priority
                          || new_priority > cur->priority;
@@ -607,12 +614,51 @@ init_thread (struct thread *t, const char *name, int priority)
       }
   }
 
+  #ifdef USERPROG
+    t->exit_status = 0;
+    memset (t->fdtable, 0, sizeof (*t->fdtable));
+    /* Set fd = 0 to an invalid ptr */
+    t->fdtable[RESERVED_FD] = (void *)THREAD_MAGIC;
+    /* First two FDs reserved */
+    t->next_fd = EXEC_FD + 1;
+  
+    list_init (&t->children);
+  #endif
+
   /* Initialize the list of locks held by current list*/
   list_init (&t->locks_held);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+}
+
+/* Initializes the exit information associated with child thread
+   T, adds it to the parent thread's children list and adds it to
+   the child T. Returns true if successful, including case where
+   t is initial thread and requires no set up. Otherwise, returns 
+   false if palloc_get_page fails. */
+static bool
+init_child (struct thread *t)
+{
+  if (t != initial_thread)
+    {
+      struct child_exit_info *exit_info = palloc_get_page (0);
+      if (exit_info == NULL)
+        return false;
+
+      exit_info->tid = t->tid;
+      exit_info->exit_status = 0;
+      sema_init (&exit_info->exited, 0);
+      lock_init (&exit_info->refs_lock);
+
+      /* Both parent and child have a pointer to this child struct. */
+      exit_info->refs_cnt = 2;
+
+      list_push_back (&thread_current ()->children, &exit_info->child_elem);
+      t->exit_info = exit_info;
+    }
+  return true;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
