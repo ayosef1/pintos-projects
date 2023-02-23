@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/fixed-point.h"
+#include "threads/synch.h"
 
 
 /* States in a thread's life cycle. */
@@ -32,7 +33,47 @@ typedef int tid_t;
 
 #define RECENT_CPU_TIME_INITIAL 0       /* Initial thread's recent cpu time. */
 
+/* Size of the file descriptor table and therefore limit on
+   number of files a process can open */
+#define MAX_FILES 128
 
+/* Reserved file descriptor should never allocate */
+#define RESERVED_FD 0
+/* Reserved file descriptor for process executable */
+#define EXEC_FD 1
+
+/* The shared child exit information used to synchronize exiting between
+   child and parent as well as communicate the child exit status to the
+   parent. The parent stores it as an element in its `children` list. The
+   child stores a pointer to it in its member `exit_info`.
+   
+   The 'tid' is the child's TID, used by parent in wait to find correct child.
+   When a child exits, it stores its exit status in member 'exit_status' and 
+   then signals its potentially waiting parent through 'exited' that it can 
+   read the 'exit_status' has been updated. 
+   
+   The 'refs_lock' and 'refs_cnt' are useful for freeing this shared data
+   structure. Either both or one of the parent and child can have a pointer to
+   the struct at a given time. Using 'refs_cnt', the procress currently
+   accessing this shared memory (either the child or parent) knows if it is the
+   last to do so in which case it would eventually free the shared data
+   structure. 
+   
+   Finally, the 'elem' member allows a parent process to keep track of its
+   child processes by maintaining a list of child_exit_info structs. */
+struct child_exit_info
+    {
+        tid_t tid;                              /* Child's tid. */
+        int exit_status;                        /* Child's exit status. */
+        struct semaphore exited;                /* Sync for waiting parent to
+                                                   get exit status of child. */
+        int refs_cnt;                           /* Number of references to the
+                                                   the struct. */   
+        struct lock refs_lock;                  /* Lock to access refs_cnt. */
+        struct list_elem child_elem;            /* List element for parent's
+                                                   children list. */
+    };
+    
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -89,36 +130,45 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
+
 struct thread
   {
-    /* Owned by thread.c. */
-    tid_t tid;                          /* Thread identifier. */
-    enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
-    uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Effective Priority. */
-    int original_priority;              /* Non-donated Priority. */
-    int niceness;                       /* Nice value. */
-    int64_t wake_time;                  /* Time at which thread should wake
-                                           after being put to sleep. */
-    bool recent_cpu_changed;            /* Had recent_cpu change since last
-                                           priority change */
-    fixed_point recent_cpu_time;        /* Exponentially weighted moving 
-                                           average of recent CPU time. */
-    struct semaphore *wake_sema;        /* Used to indicate sleeping thread 
-                                           should wake up. */
-    struct list_elem sleep_elem;        /* List element for sleeping threads
-                                           list. */
-    struct list_elem allelem;           /* List element for all threads list. */
+   /* Owned by thread.c. */
+   tid_t tid;                          /* Thread identifier. */
+   enum thread_status status;          /* Thread state. */
+   char name[16];                      /* Name (for debugging purposes). */
+   uint8_t *stack;                     /* Saved stack pointer. */
+   int priority;                       /* Effective Priority. */
+   int original_priority;              /* Non-donated Priority. */
+   int niceness;                       /* Nice value. */
+   int64_t wake_time;                  /* Time at which thread should wake
+                                          after being put to sleep. */
+   bool recent_cpu_changed;            /* Had recent_cpu change since last
+                                          priority change */
+   fixed_point recent_cpu_time;        /* Exponentially weighted moving 
+                                          average of recent CPU time. */
+   struct semaphore *wake_sema;        /* Used to indicate sleeping thread 
+                                          should wake up. */
+   struct list_elem sleep_elem;        /* List element for sleeping threads
+                                          list. */
+   struct list_elem allelem;           /* List element for all threads list. */
 
-    /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+   /* Shared between thread.c and synch.c. */
+   struct list_elem elem;              /* List element. */
 
-    struct list locks_held;             /* List of locks held by this thread. */
-    struct lock *waiting_lock;          /* Lock we are waiting for (if any)*/
+   struct list locks_held;             /* List of locks held by this thread. */
+   struct lock *waiting_lock;          /* Lock we are waiting for (if any). */
+
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                  /* Page directory. */
+   /* Owned by userprog/process.c. */
+   uint32_t *pagedir;                  /* Page directory. */
+   int next_fd;                        /* Smallest available fd. */
+   int exit_status;                    /* Exit status of thread. */
+   struct list children;               /* List of children's exit 
+                                          information. */
+   struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
+   struct child_exit_info *exit_info;  /* Thread's exit information shared with
+                                          parent. */
 #endif
 
     /* Owned by thread.c. */
@@ -171,4 +221,5 @@ int thread_max_waiting_priority (struct thread *);
 bool thread_compare_priority (const struct list_elem *a,
                           const struct list_elem *b,
                           void *aux UNUSED);
+
 #endif /* threads/thread.h */
