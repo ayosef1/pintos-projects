@@ -14,6 +14,8 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "vm/page.h"
+#include <hash.h>
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -657,6 +659,7 @@ init_child (struct thread *t)
 
       list_push_back (&thread_current ()->children, &exit_info->child_elem);
       t->exit_info = exit_info;
+      hash_init (&t->sup_pagetable, page_hash, page_less, NULL);
     }
   return true;
 }
