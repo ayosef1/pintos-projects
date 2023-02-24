@@ -2,22 +2,22 @@
 #define VM_FRAME_H
 
 // #include "vm/page.h"
-#include <list.h>
+#include <hash.h>
+#include "threads/thread.h"
 
-struct frame
+struct fte
     {
-        bool pinned;                    /* Whether frame is pinned */
-        bool free;                      /* Whether frame is free */
+        void *kaddr;                    /* The frame's kernel virtual address 
+                                           used as hash entry */
         void *uaddr;                    /* User Virtual Address of the frame
                                            contents */
-        void *kpage;                    /* The frame's kernel virtual address */
-        struct page *page;              /* The supplemental page table info for
-                                           eviction */
-        struct list_elem list_elem;     /* Frame list element */
+        tid_t tid;                      /* TID of owner of frame */
+        bool pinned;                    /* Whether frame is pinned */
+        struct hash_elem hash_elem;     /* Frame list element */
     };
 
 void frame_init (void);
-void *frame_get_page (enum palloc_flags);
+void *frame_get_page (enum palloc_flags flags);
 void frame_free_page (void *kpage);
 
 #endif /* vm/frame.h */
