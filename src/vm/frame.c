@@ -16,9 +16,9 @@ static bool frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
                         void *aux UNUSED);
 static struct fte *frame_lookup (void *kpage);
 
-/* Initializes Frame Table to allow for paging */
+/* Initializes Frame Table to allow for paging. */
 void
-frame_init()
+frame_table_init()
 {
     hash_init (&frame_table, frame_hash, frame_less, NULL);
     lock_init(&frame_lock);
@@ -26,7 +26,7 @@ frame_init()
 
 /* Returns a new frame for the user process. It first tries to acquire a
    new frame from the user pool. If there are none left it acquires it
-   evicts using LRU */
+   by evicting using the clock algorithm */
 void *
 frame_get_page (enum palloc_flags flags)
 {
@@ -48,6 +48,8 @@ frame_get_page (enum palloc_flags flags)
     return kpage;
 }
 
+/* Frees the physical frame associated with kernel virtual page KPAGE
+   and all associated memory. */
 void
 frame_free_page (void *kpage)
 {
@@ -57,16 +59,20 @@ frame_free_page (void *kpage)
     palloc_free_page (kpage);
 }
 
+/* Sets the user virtual addres of frame, whose kernel virtual address is
+   KPAGE's, to UPAGE */
 void 
-frame_set_uaddr (void *kpage, void *upage)
+frame_set_upage (void *kpage, void *upage)
 {
     struct fte *fte = frame_lookup (kpage);
     if (fte == NULL)
         return;
     fte->upage = upage;
-    /* TODO: Maybe also unpin here? */
+    /* TODO: Maybe also unpin here when do eviction */
 }
 
+/* Inserts the frame table entry FTE into the frame table with key KPAGE 
+   corresponding to its physical address. */
 void
 insert_frame (struct fte * fte, void * kpage)
 {
@@ -82,8 +88,10 @@ insert_frame (struct fte * fte, void * kpage)
     lock_release (&frame_lock);
 }
 
-/* This function might be redundant right now, meant to completely delete
-   a frame associate with a virtual kernal address. */
+/* Removes the frame table entry that corresponds whose physical address 
+   corresponds to the kernel virtual page KPAGE from the frame table and
+   frees the associated memory. Returns true if the entry was removed and
+   false if the entry could not be found in the table. */
 static bool
 delete_frame (void * kpage)
 {
@@ -102,8 +110,9 @@ delete_frame (void * kpage)
     return true;
 }
 
-/* Returns the frame containing the given virtual address,
-   or a null pointer if no such frame exists. */
+/* Returns the frame table entry that corresponds to the physical frame
+   associated with the kernel virtual page KPAGE. If no such entry exists,
+   returns NULL. */
 struct fte *
 frame_lookup (void *kpage)
 {
