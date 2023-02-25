@@ -536,7 +536,6 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
   if (kpage == NULL)
     return false;
 
-  /* TODO: Add stack as a swap file */
   uint8_t * stack_upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
   union disk_info empty_disk_info;
 
