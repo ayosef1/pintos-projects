@@ -7,9 +7,9 @@
 
 struct fte
     {
-        void *kaddr;                    /* The frame's kernel virtual address 
-                                           used as hash entry */
-        void *uaddr;                    /* User Virtual Address of the frame
+        void *kpage;                    /* The frame's kernel virtual page 
+                                           number used as hash key. */ 
+        void *upage;                    /* User Virtual Address of the frame
                                            contents */
         tid_t tid;                      /* TID of owner of frame */
         bool pinned;                    /* Whether frame is pinned */
@@ -19,5 +19,6 @@ struct fte
 void frame_init (void);
 void *frame_get_page (enum palloc_flags flags);
 void frame_free_page (void *kpage);
+void frame_set_uaddr (void *kpage, void *upage);
 
 #endif /* vm/frame.h */

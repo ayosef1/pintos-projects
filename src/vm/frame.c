@@ -14,7 +14,7 @@ static bool delete_frame (void * vaddr);
 static unsigned frame_hash (const struct hash_elem *fte_, void *aux UNUSED);
 static bool frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
                         void *aux UNUSED);
-static struct fte *frame_lookup (void *kaddr);
+static struct fte *frame_lookup (void *kpage);
 
 /* Initializes Frame Table to allow for paging */
 void
@@ -57,14 +57,24 @@ frame_free_page (void *kpage)
     palloc_free_page (kpage);
 }
 
+void 
+frame_set_uaddr (void *kpage, void *upage)
+{
+    struct fte *fte = frame_lookup (kpage);
+    if (fte == NULL)
+        return;
+    fte->upage = upage;
+    /* TODO: Maybe also unpin here? */
+}
+
 void
 insert_frame (struct fte * fte, void * kpage)
 {
     /* Probably want to make sure isn't evicted until info loaded from
        supplementary page table */
     fte->pinned = true;
-    fte->uaddr = NULL;
-    fte->kaddr = kpage;
+    fte->upage = NULL;
+    fte->kpage = kpage;
     fte->tid = thread_current ()->tid;
 
     lock_acquire (&frame_lock);
@@ -75,17 +85,16 @@ insert_frame (struct fte * fte, void * kpage)
 /* This function might be redundant right now, meant to completely delete
    a frame associate with a virtual kernal address. */
 static bool
-delete_frame (void * kaddr)
+delete_frame (void * kpage)
 {
     /* TODO: Very coarse grain locking here, can it be simpler? */
     lock_acquire (&frame_lock);
-    struct fte *fte = frame_lookup (kaddr);
+    struct fte *fte = frame_lookup (kpage);
     if (fte == NULL)
         {
             lock_release (&frame_lock);
             return false;
         }
-    lock_acquire (&frame_lock);
     hash_delete (&frame_table, &fte->hash_elem);
     /* TODO: Add to a free list perhaps? */
     free (fte);
@@ -96,12 +105,12 @@ delete_frame (void * kaddr)
 /* Returns the frame containing the given virtual address,
    or a null pointer if no such frame exists. */
 struct fte *
-frame_lookup (void *kaddr)
+frame_lookup (void *kpage)
 {
   struct fte f;
   struct hash_elem *e;
 
-  f.kaddr = kaddr;
+  f.kpage = kpage;
   e = hash_find (&frame_table, &f.hash_elem);
   return e != NULL ? hash_entry (e, struct fte, hash_elem) : NULL;
 }
@@ -111,16 +120,16 @@ static unsigned
 frame_hash (const struct hash_elem *fte_, void *aux UNUSED)
 {
   const struct fte *fte = hash_entry (fte_, struct fte, hash_elem);
-  return hash_int ((unsigned)fte->kaddr);
+  return hash_int ((unsigned)fte->kpage);
 }
 
 /* Returns true if a frame a preceds frame b. */
 static bool
 frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
-               void *aux UNUSED)
+            void *aux UNUSED)
 {
   const struct fte *a = hash_entry (a_, struct fte, hash_elem);
   const struct fte *b = hash_entry (b_, struct fte, hash_elem);
   
-  return a->kaddr < b->kaddr;
+  return a->kpage < b->kpage;
 }
