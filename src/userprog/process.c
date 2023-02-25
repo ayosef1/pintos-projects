@@ -20,6 +20,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "vm/frame.h"
+#include "vm/page.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (struct process_arg *arg, void (**eip) (void), void **esp);
@@ -497,7 +498,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (ofs % PGSIZE == 0);
 
-  file_seek (file, ofs);
+  size_t lazy_ofs = ofs;
   while (read_bytes > 0 || zero_bytes > 0) 
     {
       /* Calculate how to fill this page.
@@ -506,30 +507,15 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      /* Get a page of memory. */
-      uint8_t *kpage = frame_get_page (PAL_USER);
-      if (kpage == NULL)
+      /* Lazy load */
+      if (!page_try_add_file (upage, writable, file, page_read_bytes,
+                              lazy_ofs))
         return false;
-
-      /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-        {
-          frame_free_page (kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
-      /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
-        {
-          frame_free_page (kpage);
-          return false; 
-        }
-
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
+      lazy_ofs += PGSIZE;
     }
   return true;
 }
@@ -546,6 +532,7 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
   if (kpage == NULL)
     return false;
 
+  /* TODO: Add stack as a swap file */
   success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
   if (success)
     *esp = PHYS_BASE;
