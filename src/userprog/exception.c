@@ -2,14 +2,22 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include "userprog/gdt.h"
+#include "userprog/pagedir.h"
+#include "userprog/syscall.h"
 #include "threads/interrupt.h"
+#include "threads/palloc.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "vm/page.h"
+#include "vm/frame.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
+static bool valid_stack_growth (void* esp, void* fault_addr);
+static bool install_page (void *upage, void *kpage, bool writable);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -127,6 +135,7 @@ page_fault (struct intr_frame *f)
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
+  void *fault_page;  /* Fault page (rounded down to nearest page)*/
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
@@ -149,6 +158,34 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
+  fault_page = pg_round_down (fault_addr);
+
+  if (!not_present && user)
+   exit(-1);
+  // Check if page exists in the supplemental page table?
+  if (is_user_vaddr (fault_addr) && fault_addr != NULL && not_present)
+    {
+      void *kpage = frame_get_page (PAL_USER | PAL_ZERO);
+      if (kpage == NULL)
+         PANIC ("Unable to acquire page");
+
+      if (valid_stack_growth(f->esp, fault_addr))
+         {
+            if (install_page (fault_page, kpage, true))
+               return;
+         }
+      else if (page_install_upage (fault_page, kpage))
+         {
+            return;
+         }
+      else 
+         {
+            exit (-1);
+         }
+    }
+
+    if (!not_present)
+
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
@@ -160,3 +197,23 @@ page_fault (struct intr_frame *f)
   kill (f);
 }
 
+/* Check if access is within 32 bytes of stack pointer*/
+ static bool
+ valid_stack_growth (void* esp, void* fault_addr)
+ {
+     if (fault_addr < (esp - 32)) {
+       return false;
+     }
+     return true;
+ }
+
+static bool
+ install_page (void *upage, void *kpage, bool writable)
+ {
+   struct thread *t = thread_current ();
+
+   /* Verify that there's not already a page at that virtual
+      address, then map our page there. */
+   return (pagedir_get_page (t->pagedir, upage) == NULL
+           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+ }
