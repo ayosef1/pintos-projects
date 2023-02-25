@@ -161,8 +161,10 @@ page_fault (struct intr_frame *f)
   fault_page = pg_round_down (fault_addr);
 
   // Check if page exists in the supplemental page table?
-  if (is_user_vaddr (fault_addr) && fault_addr != NULL)
+  if (is_user_vaddr (fault_addr))
     {
+      if (!not_present)
+         exit (-1);
       void *kpage = frame_get_page (PAL_USER | PAL_ZERO);
       if (kpage == NULL)
          PANIC ("Unable to acquire page");
