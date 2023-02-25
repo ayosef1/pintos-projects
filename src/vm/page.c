@@ -9,55 +9,60 @@
 #include "vm/page.h"
 #include "vm/frame.h"
 
-static struct spte * lookup_page (struct hash *, void *upage);
+static struct spte * lookup_spte (struct hash *, void *upage);
 static bool install_file (void *kpage, struct file_info file_info);
 
 /* Stores the mapping from the user virtual address UPAGE to the
    relevant information to load the PGSIZE segement into memory from
-   disk. In particular PAGE_READ_BYTES bytes are read from offset
-   OFS in FILE into the frame. The remaining PGSIZE - PAGE_READ_BYTES
-   bytes are zeroed out. WRITABLE is a bit to be set in the page table
-   entry once the page is loaded into memory. 
+   disk in the current thread's supplementary page table.
+   If mapping exits already, overwrites this mapping.
+        - WRITABLE is a bit to be set in the page table
+          entry once the page is loaded into memory. 
+        - IS_FILE is true if the page should be stored in the filesys
+          and false if it should be stored in swap
+        - DISK_INFO is the additional information relevant to load it
+          from the relevant part of disk
    
    Returns true if page was successfully added to the supplementary
-   page table adn false otherwise. */
+   page table, false otherwise. */
 bool
-page_try_add_file(void *upage, bool writable, struct file *file,
-                  size_t page_read_bytes, off_t ofs)
+spt_try_add_upage (void *upage, bool writable, bool is_file,
+                    union disk_info *disk_info)
 {
     ASSERT (pg_ofs (upage) == 0);
 
-    struct spte * new_spte;
-    struct file_info *file_info;
+    struct hash *spt = &thread_current ()->spt;
+    struct spte * spte;
 
-    new_spte = malloc (sizeof (struct spte));
-    if (new_spte == NULL)
-        return false;
+    spte = lookup_spte (spt, upage);
+    if (spte == NULL)
+        {
+            spte = malloc (sizeof (struct spte));
+            if (spte == NULL)
+                return false;
+        }
     
-    new_spte->upage = upage;
-    new_spte->is_file = true;
-    new_spte->writable = writable;
+    spte->upage = upage;
+    spte->is_file = is_file;
+    spte->writable = writable;
 
-    file_info = &new_spte->disk_info.file_info;
-    file_info->file = file;
-    file_info->page_read_bytes = page_read_bytes;
-    file_info->ofs = ofs;
+    spte->disk_info = *disk_info;
 
-    hash_insert (&thread_current ()->sup_pagetable, &new_spte->hash_elem);
+    hash_insert (spt, &spte->hash_elem);
 
     return true;
 }
 
 /* Loading the current thread's virtual page UPAGE into the frame KPAGE */
 bool
-page_install_upage (void *upage, void *kpage)
+spt_load_upage (void *upage, void *kpage)
 {
     ASSERT (pg_ofs (upage) == 0);
 
     struct spte *spte;
     union disk_info disk_info;
 
-    spte = lookup_page (&thread_current ()->sup_pagetable, upage);
+    spte = lookup_spte (&thread_current ()->spt, upage);
     if (spte == NULL)
         goto fail;
 
@@ -109,7 +114,7 @@ page_less (const struct hash_elem *a_, const struct hash_elem *b_,
 /* Looks up UPAGE page in a supplemental page table HASH.
    Returns NULL if no such entry, otherwise returns spte pointer. */
 static struct spte *
-lookup_page (struct hash *spt, void *upage)
+lookup_spte (struct hash *spt, void *upage)
 {
   struct spte spte;
   struct hash_elem *e;

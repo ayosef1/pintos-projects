@@ -507,9 +507,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
+      union disk_info disk_info;
+      disk_info.file_info.file = file;
+      disk_info.file_info.page_read_bytes = page_read_bytes;
+      disk_info.file_info.ofs = lazy_ofs;
+
       /* Lazy load */
-      if (!page_try_add_file (upage, writable, file, page_read_bytes,
-                              lazy_ofs))
+      if (!spt_try_add_upage (upage, writable, true, &disk_info))
         return false;
       /* Advance. */
       read_bytes -= page_read_bytes;
@@ -533,7 +537,12 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
     return false;
 
   /* TODO: Add stack as a swap file */
-  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  uint8_t * stack_upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
+  union disk_info empty_disk_info;
+
+  success = spt_try_add_upage (stack_upage, true, false, &empty_disk_info);
+  if (success)
+    success = install_page (stack_upage, kpage, true);
   if (success)
     *esp = PHYS_BASE;
   else

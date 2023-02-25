@@ -661,7 +661,7 @@ init_child (struct thread *t)
       t->exit_info = exit_info;
 
 #ifdef VM
-      hash_init (&t->sup_pagetable, page_hash, page_less, NULL);
+      hash_init (&t->spt, page_hash, page_less, NULL);
 #endif
     }
   return true;

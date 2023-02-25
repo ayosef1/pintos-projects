@@ -174,7 +174,7 @@ page_fault (struct intr_frame *f)
             if (install_page (fault_page, kpage, true))
                return;
          }
-      else if (page_install_upage (fault_page, kpage))
+      else if (spt_load_upage (fault_page, kpage))
          {
             return;
          }
@@ -208,7 +208,7 @@ page_fault (struct intr_frame *f)
  }
 
 static bool
- install_page (void *upage, void *kpage, bool writable)
+install_page (void *upage, void *kpage, bool writable)
  {
    struct thread *t = thread_current ();
 

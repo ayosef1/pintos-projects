@@ -29,9 +29,9 @@ struct spte
         struct hash_elem hash_elem;     /* Page Table hash elem. */
     };
 
-bool page_try_add_file(void *uaddr,bool writable, struct file *file,
-                       size_t page_read_bytes, off_t ofs);
-bool page_install_upage (void *upage, void *kpage);
+bool spt_try_add_upage (void *upage, bool writable, bool is_file,
+                         union disk_info *disk_info);
+bool spt_load_upage (void *upage, void *kpage);
 unsigned page_hash (const struct hash_elem *p_, void *aux);
 bool page_less (const struct hash_elem *a_, const struct hash_elem *b_,
                         void *aux);
