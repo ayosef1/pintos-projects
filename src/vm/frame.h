@@ -30,7 +30,7 @@ struct fte
         struct hash_elem hash_elem;     /* Frame Table element */
     };
 
-void frame_init (void);
+void frame_table_init (void);
 void *frame_get_page (enum palloc_flags flags);
 void frame_free_page (void *kpage);
 void frame_set_upage (void *kpage, void *upage);
