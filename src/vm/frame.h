@@ -1,8 +1,8 @@
 #ifndef VM_FRAME_H
 #define VM_FRAME_H
 
-// #include "vm/page.h"
 #include <hash.h>
+#include "threads/palloc.h"
 #include "threads/thread.h"
 
 /* A frame table entry of the frame table.
