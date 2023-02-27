@@ -86,6 +86,9 @@ mmap_destroy ()
   hash_destroy (&thread_current ()->mmap_table, &mmap_destructor_fn);
 }
 
+/* Destructor function for each mmap_entry E of the current thread's 
+   mmap_table. This writes any dirty pages back to memory and frees the
+   mmap_table_entry memory. */
 static void 
 mmap_destructor_fn (struct hash_elem *e, void *aux UNUSED)
 {

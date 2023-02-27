@@ -56,7 +56,7 @@ spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
    spt needs to store the file pointer FP for each. Each page contains all
    read bytes except the final page which has FINAL_READ_BYTES read bytes.
    
-   Returns true on success of adding mappings for all pages.*/
+   Returns true on success of adding mappings for all pages. */
 bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
                             size_t final_read_bytes)
 {

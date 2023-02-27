@@ -5,6 +5,18 @@
 #include "filesys/file.h"
 #include "filesys/off_t.h"
 
+/* The the type of page that the supplementary page table entry represents.
+   This is relevant information when decided where to write to memory and what
+   to clean up when evicting and removing pages from the supplementary page
+   table.
+        - EXEC pages are never written back to disk. It is written to swap if 
+        the page is dirty. If it isn't dirty, it is only every read back from
+        the filesys after eviction.
+        -MMAP pages is written back only to the filesys and only if the page
+        is dirty. Otherwise it is just read from filesys.
+        - TMP data is local data only used for the duration of the user process.
+        It is stored in SWAP whenever evicted / before lazy loaded and
+        discarded once the process exits. */
 enum page_type
     {
         EXEC,                       /* An executable file's page. */
@@ -21,7 +33,9 @@ enum page_type
    The offset `ofs` describes the offset in that 
    sector to start from.
    `page_read_bytes` is the number of bytes to read starting from that
-   offset. The remaning PGSIZE - `page_read_bytes` are zeroed out. */
+   offset. The remaning PGSIZE - `page_read_bytes` are zeroed out.
+   `writable` instructs the process how to set the writable bit in
+   the page table once loaded into memory. */
 struct filesys_info
     {
         struct file *file;          /* File pointer. */
@@ -44,8 +58,11 @@ union disk_info
    This table contains the information to correctly page out to disk as well
    as clean up resources when a the page is freed.
 
-   The `is_file` member is used to determine how to interpret the `disk_info`
-   that describes the pertinent information to load a page from disk. The
+   The `filesys_page` member says where the page is currently or was most
+   recently stored (depending on whether it is currently `in_memory` or not).
+   `disk_info` describes describes the pertinent information to load a page
+   from disk and is interpreted based on the `type` of page it is and
+   what the `filesys_page` bit. The
    `writable` member desribes how the page table entry's writable bit should
    be initialized when the page is loaded from disk. Finally the `hash_elem`
    is the element of the supplementary page table (a hash table). */
