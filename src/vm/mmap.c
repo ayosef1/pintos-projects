@@ -1,7 +1,11 @@
 #include <hash.h>
 #include "threads/malloc.h"
 #include "threads/thread.h"
+#include "userprog/syscall.h"
 #include "vm/mmap.h"
+#include "vm/page.h"
+
+static void mmap_destructor_fn (struct hash_elem *e, void *aux UNUSED);
 
 /* Adds an entry to the current thread's mmap table with mapping from
    the first user virtual page BEGIN_UPAGE to the first page END_UPAGE
@@ -74,4 +78,19 @@ mmap_less (const struct hash_elem *a_, const struct hash_elem *b_,
   const struct mmap_table_entry *b = hash_entry (b_, struct mmap_table_entry,
                                                  hash_elem);
   return a->mapid < b->mapid;
+}
+
+void
+mmap_destroy ()
+{
+  hash_destroy (&thread_current ()->mmap_table, &mmap_destructor_fn);
+}
+
+static void 
+mmap_destructor_fn (struct hash_elem *e, void *aux UNUSED)
+{
+    struct mmap_table_entry *m = hash_entry (e, struct mmap_table_entry,
+                                                   hash_elem);
+    spt_remove_upages (m->begin_upage, m->pg_cnt);
+    free (m);
 }

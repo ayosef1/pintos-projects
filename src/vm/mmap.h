@@ -13,6 +13,7 @@ struct mmap_table_entry
         struct hash_elem hash_elem;     /* Memory Map Table hash elem. */
     };
 
+void mmap_destroy (void);
 mapid_t mmap_insert (void *begin_upage, int pg_cnt);
 void mmap_remove (mapid_t mapid);
 struct mmap_table_entry * mmap_find (mapid_t mapid);
