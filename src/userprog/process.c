@@ -173,7 +173,7 @@ process_exit (void)
     {
       struct list_elem *e = list_pop_front (&cur->children);
       struct child_exit_info *cp = list_entry (e, struct child_exit_info, 
-                                            child_elem);
+                                               child_elem);
       lock_acquire (&cp->refs_lock);
       int refs_cnt = --(cp->refs_cnt);
       lock_release (&cp->refs_lock);
@@ -182,6 +182,7 @@ process_exit (void)
         palloc_free_page (cp);
     }
 
+  mmap_destroy ();
   /* Close all file descriptors. */
   for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
     {
@@ -508,12 +509,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       union disk_info disk_info;
-      disk_info.file_info.file = file;
-      disk_info.file_info.page_read_bytes = page_read_bytes;
-      disk_info.file_info.ofs = lazy_ofs;
+      disk_info.filesys_info.file = file;
+      disk_info.filesys_info.page_read_bytes = page_read_bytes;
+      disk_info.filesys_info.ofs = lazy_ofs;
+      disk_info.filesys_info.writable = writable;
 
       /* Lazy load */
-      if (!spt_try_add_upage (upage, writable, true, &disk_info))
+      if (!spt_try_add_upage (upage, EXEC, false, true, &disk_info))
         return false;
       /* Advance. */
       read_bytes -= page_read_bytes;
@@ -539,7 +541,7 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
   uint8_t * stack_upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
   union disk_info empty_disk_info;
 
-  success = spt_try_add_upage (stack_upage, true, false, &empty_disk_info);
+  success = spt_try_add_upage (stack_upage, TMP, true, false, &empty_disk_info);
   if (success)
     success = install_page (stack_upage, kpage, true);
   if (success)

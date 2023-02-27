@@ -9,7 +9,7 @@
 #include "vm/page.h"
 #include "vm/frame.h"
 
-static bool install_file (void *kpage, struct file_info file_info);
+static bool install_file (void *kpage, struct filesys_info filesys_info);
 
 /* Stores the mapping from the user virtual address UPAGE to the
    relevant information to load the PGSIZE segement into memory from
@@ -25,8 +25,8 @@ static bool install_file (void *kpage, struct file_info file_info);
    Returns true if page was successfully added to the supplementary
    page table, false otherwise. */
 bool
-spt_try_add_upage (void *upage, bool writable, bool  filesys_page,
-                    union disk_info *disk_info)
+spt_try_add_upage (void *upage, enum page_type type, bool in_memory, 
+                   bool filesys_page, union disk_info *disk_info)
 {
     ASSERT (pg_ofs (upage) == 0);
 
@@ -41,9 +41,9 @@ spt_try_add_upage (void *upage, bool writable, bool  filesys_page,
         }
     
     spte->upage = upage;
+    spte->type = type;
+    spte->in_memory = in_memory;
     spte->filesys_page = filesys_page;
-    spte->writable = writable;
-
     spte->disk_info = *disk_info;
 
     hash_insert (&thread_current ()->spt, &spte->hash_elem);
@@ -51,30 +51,37 @@ spt_try_add_upage (void *upage, bool writable, bool  filesys_page,
     return true;
 }
 
-bool spt_try_add_mmap_file (void *begin_upage, struct file *fp, int pg_cnt,
+/* Attempts to add PG_CNT consecutive user virtual pages starting from 
+   BEGIN_UPAGE to the supplementary page table. To lazily read, the
+   spt needs to store the file pointer FP for each. Each page contains all
+   read bytes except the final page which has FINAL_READ_BYTES read bytes.
+   
+   Returns true on success of adding mappings for all pages.*/
+bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
                             size_t final_read_bytes)
 {
   union disk_info disk_info;
   int pg;
 
-  disk_info.file_info.file = fp;
-  disk_info.file_info.page_read_bytes = PGSIZE;
-  disk_info.file_info.ofs = 0;
+  disk_info.filesys_info.file = fp;
+  disk_info.filesys_info.page_read_bytes = PGSIZE;
+  disk_info.filesys_info.ofs = 0;
 
   for (pg = 0; pg < pg_cnt - 1; pg += 1)
     {
-        if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), true, true,
+        if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
                                 &disk_info))
             {
                 spt_remove_upages (begin_upage, pg);
                 return false;
             }
-        disk_info.file_info.ofs += PGSIZE;
+        disk_info.filesys_info.ofs += PGSIZE;
     }
   
   /* Final case. */
-  disk_info.file_info.page_read_bytes = final_read_bytes % PGSIZE;
-  if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), true, true, &disk_info))
+  disk_info.filesys_info.page_read_bytes = final_read_bytes % PGSIZE;
+  if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, true, true,
+                          &disk_info))
     {
         spt_remove_upages (begin_upage, pg);
         return false;
@@ -83,26 +90,48 @@ bool spt_try_add_mmap_file (void *begin_upage, struct file *fp, int pg_cnt,
 }
 
 /* Removes PG_CNT consecutive user virtual pages from the current thread's
-starting from */
+   supplementary page table starting from BEGIN_UPAGE. This is specifically
+   when a process is done with certain virtual pages, for example, when it
+   is exiting.  */
 void
 spt_remove_upages (void * begin_upage, int num_pages)
 {
     struct hash * spt = &thread_current ()->spt;
+    uint32_t *pd = thread_current ()->pagedir;
     struct spte * spte;
     for (int pg = 0; pg < num_pages; pg ++)
         {
-            spte = spt_find (begin_upage + (pg * PGSIZE));
+            void *cur_upage = begin_upage + (pg * PGSIZE);
+            spte = spt_find (cur_upage);
             if (spte == NULL)
                 continue;
-            /* Later will have to look at whether loaded, for now assume it
-               is not and therfore what to do with frame table. */
-            ASSERT (!spte->in_memory);
+            /* Commit to file if a diry MMAP page. */
+            if (spte->in_memory)
+                {
+                    if (spte->type == MMAP && pagedir_is_dirty (pd, cur_upage))
+                        {
+
+                            lock_acquire (&filesys_lock);
+                            file_write_at (spte->disk_info.filesys_info.file,
+                                        cur_upage, PGSIZE,
+                                        spte->disk_info.filesys_info.ofs);
+                            lock_release (&filesys_lock);
+                        }
+                    frame_free_page (cur_upage);
+                }
+            /*
+            else if (!spte->in_memory && !spte->filesys_page)
+                {
+                    //Free swap table memory
+                }
+            */
             hash_delete (spt, &spte->hash_elem);
-            free (spt);
+            free (spte);
         }
 }
 
-/* Loading the current thread's virtual page UPAGE into the frame KPAGE. */
+/* Loading the current thread's virtual page UPAGE into the frame KPAGE
+   using information from the current thread's supplementary page table. */
 bool
 spt_load_upage (void *upage, void *kpage)
 {
@@ -120,25 +149,72 @@ spt_load_upage (void *upage, void *kpage)
     if (!spte->filesys_page)
         PANIC ("Not implemented non FILEs");
     
-    if (!install_file (kpage, disk_info.file_info))
+    if (!install_file (kpage, disk_info.filesys_info))
         goto fail;
 
 
     uint32_t *pd = thread_current ()->pagedir;
     pagedir_clear_page (pd, upage);
 
-    if (!pagedir_set_page (pd, upage, kpage, spte->writable)) 
+    bool writable = true;
+    if (spte->type == EXEC)
+        writable = spte->disk_info.filesys_info.writable;
+    if (!pagedir_set_page (pd, upage, kpage, writable)) 
         goto fail;
 
     pagedir_set_accessed (pd, upage, true);
     pagedir_set_dirty (pd, upage, false);
 
     frame_set_upage (kpage, upage);
+    spte->in_memory = true;
     return true;
 
     fail:
         frame_free_page (kpage);
         return false;
+}
+
+/* This is not a complete funciton but more to demonstrate the logic for
+   eviction once an evicted page has been selected by our eviction
+   algorithm. After this function we would write over the upage. */
+void 
+spt_evict_upage (void *upage)
+{
+
+    struct thread * cur = thread_current ();
+    struct spte *spte = spt_find (upage);
+    if (spte == NULL)
+        return;
+    
+    ASSERT (spte->in_memory);
+    switch (spte->type)
+    {
+        case (MMAP):
+            /* Only need to write if MMAP is written. */
+            if (pagedir_is_dirty(cur->pagedir, upage))
+                {
+                    /* Write back to memory. */
+                    lock_acquire (&filesys_lock);
+                    file_write_at (spte->disk_info.filesys_info.file, upage,
+                                   PGSIZE, spte->disk_info.filesys_info.ofs);
+                    lock_release (&filesys_lock);
+                }
+            break;
+        case (EXEC):
+            /* If an executable page is written to for first time, we now store
+               it in swap. */
+            if (spte->filesys_page && (!spte->disk_info.filesys_info.writable ||
+                !pagedir_is_dirty(cur->pagedir, upage)))
+                break;
+        default:
+            /* Write to swap by allocating new thing. */
+            /*
+            spte->filesys_page = false; 
+            swap_write ()
+            */
+            break;
+    }
+
 }
 
 /* Looks up UPAGE page in a supplemental page table HASH.
@@ -174,23 +250,23 @@ spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
 }
 
 static bool
-install_file (void *kpage, struct file_info file_info)
+install_file (void *kpage, struct filesys_info filesys_info)
 {
-    if (file_info.page_read_bytes == 0)
+    if (filesys_info.page_read_bytes == 0)
         memset (kpage, 0, PGSIZE);
     else
         {
             size_t page_zero_bytes;
             /* Don't have locking here because from a page fault we will
                already have the lock */
-            int bytes_read = file_read_at (file_info.file, kpage, 
-                                           file_info.page_read_bytes,
-                                           file_info.ofs);
+            int bytes_read = file_read_at (filesys_info.file, kpage, 
+                                           filesys_info.page_read_bytes,
+                                           filesys_info.ofs);
 
-            if (bytes_read != (int) file_info.page_read_bytes)
+            if (bytes_read != (int) filesys_info.page_read_bytes)
                 return false;
-            page_zero_bytes = PGSIZE - file_info.page_read_bytes;
-            memset (kpage + file_info.page_read_bytes, 0, page_zero_bytes);
+            page_zero_bytes = PGSIZE - filesys_info.page_read_bytes;
+            memset (kpage + filesys_info.page_read_bytes, 0, page_zero_bytes);
         }
     return true;
 }

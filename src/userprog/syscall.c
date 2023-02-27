@@ -447,7 +447,7 @@ sys_mmap (uint32_t *esp)
   if (fp == NULL)
     goto done;
   
-  if (!spt_try_add_mmap_file (addr, fp, pg_cnt, file_len % PGSIZE))
+  if (!spt_try_add_mmap_pages (addr, fp, pg_cnt, file_len % PGSIZE))
     {
       goto done;
     }
