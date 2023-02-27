@@ -9,7 +9,6 @@
 #include "vm/page.h"
 #include "vm/frame.h"
 
-static struct spte * lookup_spte (struct hash *, void *upage);
 static bool install_file (void *kpage, struct file_info file_info);
 
 /* Stores the mapping from the user virtual address UPAGE to the
@@ -26,15 +25,14 @@ static bool install_file (void *kpage, struct file_info file_info);
    Returns true if page was successfully added to the supplementary
    page table, false otherwise. */
 bool
-spt_try_add_upage (void *upage, bool writable, bool is_file,
+spt_try_add_upage (void *upage, bool writable, bool  filesys_page,
                     union disk_info *disk_info)
 {
     ASSERT (pg_ofs (upage) == 0);
 
-    struct hash *spt = &thread_current ()->spt;
     struct spte * spte;
 
-    spte = lookup_spte (spt, upage);
+    spte = spt_find (upage);
     if (spte == NULL)
         {
             spte = malloc (sizeof (struct spte));
@@ -43,17 +41,68 @@ spt_try_add_upage (void *upage, bool writable, bool is_file,
         }
     
     spte->upage = upage;
-    spte->is_file = is_file;
+    spte->filesys_page = filesys_page;
     spte->writable = writable;
 
     spte->disk_info = *disk_info;
 
-    hash_insert (spt, &spte->hash_elem);
+    hash_insert (&thread_current ()->spt, &spte->hash_elem);
 
     return true;
 }
 
-/* Loading the current thread's virtual page UPAGE into the frame KPAGE */
+bool spt_try_add_mmap_file (void *begin_upage, struct file *fp, int pg_cnt,
+                            size_t final_read_bytes)
+{
+  union disk_info disk_info;
+  int pg;
+
+  disk_info.file_info.file = fp;
+  disk_info.file_info.page_read_bytes = PGSIZE;
+  disk_info.file_info.ofs = 0;
+
+  for (pg = 0; pg < pg_cnt - 1; pg += 1)
+    {
+        if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), true, true,
+                                &disk_info))
+            {
+                spt_remove_upages (begin_upage, pg);
+                return false;
+            }
+        disk_info.file_info.ofs += PGSIZE;
+    }
+  
+  /* Final case. */
+  disk_info.file_info.page_read_bytes = final_read_bytes % PGSIZE;
+  if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), true, true, &disk_info))
+    {
+        spt_remove_upages (begin_upage, pg);
+        return false;
+    }
+  return true;
+}
+
+/* Removes PG_CNT consecutive user virtual pages from the current thread's
+starting from */
+void
+spt_remove_upages (void * begin_upage, int num_pages)
+{
+    struct hash * spt = &thread_current ()->spt;
+    struct spte * spte;
+    for (int pg = 0; pg < num_pages; pg ++)
+        {
+            spte = spt_find (begin_upage + (pg * PGSIZE));
+            if (spte == NULL)
+                continue;
+            /* Later will have to look at whether loaded, for now assume it
+               is not and therfore what to do with frame table. */
+            ASSERT (!spte->in_memory);
+            hash_delete (spt, &spte->hash_elem);
+            free (spt);
+        }
+}
+
+/* Loading the current thread's virtual page UPAGE into the frame KPAGE. */
 bool
 spt_load_upage (void *upage, void *kpage)
 {
@@ -62,13 +111,13 @@ spt_load_upage (void *upage, void *kpage)
     struct spte *spte;
     union disk_info disk_info;
 
-    spte = lookup_spte (&thread_current ()->spt, upage);
+    spte = spt_find (upage);
     if (spte == NULL)
         goto fail;
 
     disk_info = spte->disk_info;
     /* Assuming it is a page now. */
-    if (!spte->is_file)
+    if (!spte->filesys_page)
         PANIC ("Not implemented non FILEs");
     
     if (!install_file (kpage, disk_info.file_info))
@@ -84,7 +133,7 @@ spt_load_upage (void *upage, void *kpage)
     pagedir_set_accessed (pd, upage, true);
     pagedir_set_dirty (pd, upage, false);
 
-    frame_set_uaddr (kpage, upage);
+    frame_set_upage (kpage, upage);
     return true;
 
     fail:
@@ -92,9 +141,22 @@ spt_load_upage (void *upage, void *kpage)
         return false;
 }
 
+/* Looks up UPAGE page in a supplemental page table HASH.
+   Returns NULL if no such entry, otherwise returns spte pointer. */
+struct spte *
+spt_find (void *upage)
+{
+  struct spte spte;
+  struct hash_elem *e;
+
+  spte.upage = upage;
+  e = hash_find (&thread_current ()->spt, &spte.hash_elem);
+  return e != NULL ? hash_entry (e, struct spte, hash_elem) : NULL;
+}
+
 /* Returns a hash value for a spte P. */
 unsigned
-page_hash (const struct hash_elem *p_, void *aux)
+spt_hash (const struct hash_elem *p_, void *aux UNUSED)
 {
   const struct spte *spte = hash_entry (p_, struct spte, hash_elem);
   return hash_int ((unsigned)spte->upage);
@@ -102,26 +164,13 @@ page_hash (const struct hash_elem *p_, void *aux)
 
 /* Returns true if a spte A_ precedes spte B_. */
 bool
-page_less (const struct hash_elem *a_, const struct hash_elem *b_,
-           void *aux)
+spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
+           void *aux UNUSED)
 {
   const struct spte *a = hash_entry (a_, struct spte, hash_elem);
   const struct spte *b = hash_entry (b_, struct spte, hash_elem);
   
   return a->upage < b->upage;
-}
-
-/* Looks up UPAGE page in a supplemental page table HASH.
-   Returns NULL if no such entry, otherwise returns spte pointer. */
-static struct spte *
-lookup_spte (struct hash *spt, void *upage)
-{
-  struct spte spte;
-  struct hash_elem *e;
-
-  spte.upage = upage;
-  e = hash_find (spt, &spte.hash_elem);
-  return e != NULL ? hash_entry (e, struct spte, hash_elem) : NULL;
 }
 
 static bool

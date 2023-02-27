@@ -44,18 +44,24 @@ union disk_info
 struct spte
     {
         void *upage;                    /* User Virtual Address and SPT key. */
-        bool is_file;                   /* Whether page is a file. */
-        bool writable;                 /* Whether memory is writeable */
+        bool writable;                  /* Whether page is writeable. */
+        bool in_memory;                 /* For use when removing entries at
+                                           cleanup. */
+        bool filesys_page;              /* If stored in filesys. */
         union disk_info disk_info;      /* Info how to read and  write to 
                                            disk */
         struct hash_elem hash_elem;     /* Page Table hash elem. */
     };
 
-bool spt_try_add_upage (void *upage, bool writable, bool is_file,
+bool spt_try_add_upage (void *upage, bool writable, bool filesys_page,
                         union disk_info *disk_info);
+bool spt_try_add_mmap_file (void *begin_upage, struct file *fp, int pg_cnt,
+                            size_t final_read_bytes);
+void spt_remove_upages (void * begin_upage, int num_pages);
 bool spt_load_upage (void *upage, void *kpage);
-unsigned page_hash (const struct hash_elem *p_, void *aux);
-bool page_less (const struct hash_elem *a_, const struct hash_elem *b_,
-                void *aux);
+struct spte * spt_find (void *upage);
+unsigned spt_hash (const struct hash_elem *p_, void *aux UNUSED);
+bool spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
+                void *aux UNUSED);
 
 #endif /* vm/page.h */
