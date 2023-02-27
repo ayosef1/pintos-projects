@@ -346,7 +346,6 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  if (cur == initial_thread)
   process_exit ();
 #endif
 
