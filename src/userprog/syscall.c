@@ -429,7 +429,7 @@ sys_mmap (uint32_t *esp)
   file_len = file_length (fp);
   lock_release (&filesys_lock);
 
-  if (!is_user_vaddr (addr + file_len))
+  if (file_len == 0 || !is_user_vaddr (addr + file_len))
     goto done;
 
   pg_cnt = (pg_round_up (addr + file_len) - addr) / PGSIZE;
@@ -449,11 +449,12 @@ sys_mmap (uint32_t *esp)
   
   if (!spt_try_add_mmap_file (addr, fp, pg_cnt, file_len % PGSIZE))
     {
-      spt_remove_upages (addr, pg_cnt);
       goto done;
     }
 
   ret = mmap_insert (addr, pg_cnt);
+  if (ret == -1)
+    spt_remove_upages (addr, pg_cnt);
 
   done:
     return ret;
