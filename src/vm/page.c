@@ -6,8 +6,9 @@
 #include "threads/vaddr.h"
 #include "userprog/syscall.h"
 #include "userprog/pagedir.h"
-#include "vm/page.h"
 #include "vm/frame.h"
+#include "vm/page.h"
+#include "vm/swap.h"
 
 static bool install_file (void *kpage, struct filesys_info filesys_info);
 
@@ -119,12 +120,8 @@ spt_remove_upages (void * begin_upage, int num_pages)
                         }
                     frame_free_page (cur_upage);
                 }
-            /*
-            else if (!spte->in_memory && !spte->filesys_page)
-                {
-                    //Free swap table memory
-                }
-            */
+            else if (!spte->filesys_page)
+                    swap_free (spte->disk_info.swap_id);
             hash_delete (spt, &spte->hash_elem);
             free (spte);
         }
@@ -137,30 +134,37 @@ spt_load_upage (void *upage, void *kpage)
 {
     ASSERT (pg_ofs (upage) == 0);
 
+    uint32_t *pd;
     struct spte *spte;
     union disk_info disk_info;
+
+    pd = thread_current ()->pagedir;
+    pagedir_clear_page (pd, upage);
 
     spte = spt_find (upage);
     if (spte == NULL)
         goto fail;
 
-    disk_info = spte->disk_info;
-    /* Assuming it is a page now. */
-    if (!spte->filesys_page)
-        PANIC ("Not implemented non FILEs");
-    
-    if (!install_file (kpage, disk_info.filesys_info))
-        goto fail;
-
-
-    uint32_t *pd = thread_current ()->pagedir;
-    pagedir_clear_page (pd, upage);
 
     bool writable = true;
     if (spte->type == EXEC)
         writable = spte->disk_info.filesys_info.writable;
+    
     if (!pagedir_set_page (pd, upage, kpage, writable)) 
         goto fail;
+    
+    disk_info = spte->disk_info;
+    /* Assuming it is a page now. */
+    if (spte->filesys_page)
+        {
+            if (!install_file (kpage, disk_info.filesys_info))
+                goto fail;
+        }
+    else
+        {
+            if (!swap_try_read (disk_info.swap_id, upage))
+                goto fail;
+        }
 
     pagedir_set_accessed (pd, upage, true);
     pagedir_set_dirty (pd, upage, false);
@@ -201,19 +205,17 @@ spt_evict_upage (void *upage)
                 }
             break;
         case (EXEC):
-            /* If an executable page is written to for first time, we now store
-               it in swap. */
+            /* If an executable page has never been written to, do nothing.
+               Otherwise write to swap. */
             if (spte->filesys_page && (!spte->disk_info.filesys_info.writable ||
                 !pagedir_is_dirty(cur->pagedir, upage)))
                 break;
         default:
-            /* Write to swap by allocating new thing. */
-            /*
             spte->filesys_page = false; 
-            swap_write ()
-            */
+            spte->disk_info.swap_id = swap_write (upage);
             break;
     }
+    spte->in_memory = false;
 
 }
 
@@ -250,23 +252,23 @@ spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
 }
 
 static bool
-install_file (void *kpage, struct filesys_info filesys_info)
+install_file (void *upage, struct filesys_info filesys_info)
 {
     if (filesys_info.page_read_bytes == 0)
-        memset (kpage, 0, PGSIZE);
+        memset (upage, 0, PGSIZE);
     else
         {
             size_t page_zero_bytes;
             /* Don't have locking here because from a page fault we will
                already have the lock */
-            int bytes_read = file_read_at (filesys_info.file, kpage, 
+            int bytes_read = file_read_at (filesys_info.file, upage, 
                                            filesys_info.page_read_bytes,
                                            filesys_info.ofs);
 
             if (bytes_read != (int) filesys_info.page_read_bytes)
                 return false;
             page_zero_bytes = PGSIZE - filesys_info.page_read_bytes;
-            memset (kpage + filesys_info.page_read_bytes, 0, page_zero_bytes);
+            memset (upage + filesys_info.page_read_bytes, 0, page_zero_bytes);
         }
     return true;
 }

@@ -50,6 +50,7 @@ struct filesys_info
 union disk_info
     {
         struct filesys_info filesys_info;
+        size_t swap_id;
     };
 
 /* Supplementary page table entry. Each thread has its own SPT and each entry
