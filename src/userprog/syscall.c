@@ -191,7 +191,7 @@ sys_open (uint32_t *esp)
 
   fname = get_arg_string (esp, 1, NAME_MAX);
   if (fname == NULL)
-    return -1;
+    return SYSCALL_ERROR;
 
   lock_acquire (&filesys_lock);
   struct file *fp = filesys_open (fname);
