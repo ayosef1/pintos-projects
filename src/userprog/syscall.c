@@ -32,6 +32,8 @@ static int sys_write (uint32_t *esp);
 static void sys_seek (uint32_t *esp);
 static unsigned sys_tell (uint32_t *esp);
 static void sys_close (uint32_t *esp);
+static mapid_t sys_mmap (uint32_t *esp);
+static void sys_munmap (uint32_t *esp);
 
 static char *get_arg_string (void *esp, int pos, int limit);
 static void *get_arg_buffer (void *esp, int pos, int size);
@@ -100,16 +102,35 @@ syscall_handler (struct intr_frame *f)
     case SYS_CLOSE:
       sys_close (f->esp);
       break;
+    case SYS_MMAP:
+      f->eax = sys_mmap (f->esp);
+      break;
+    case SYS_MUNMAP:
+      sys_munmap (f->esp);
+      break;
     default:
       exit (SYSCALL_ERROR);
   }
 }
 
+/* Interface to the exit syscall to allow the page fault exception handler
+   to call exit and so do appropriate cleanup for a thread. */
 void
 exit (int status)
 {
   thread_current ()->exit_status = status;
   thread_exit ();
+}
+
+/* Interface to the munmap syscall to allow and exiting thread
+   to unmap its memory and so do appropriate cleanup for a thread. */
+void munmap (mapid_t mapid)
+{
+  struct mmap_table_entry *entry = mmap_find (mapid);
+  if (entry == NULL)
+    return;
+  spt_remove_upages (entry->begin_upage, entry->pg_cnt);
+  mmap_remove (mapid);
 }
 
 void
@@ -377,6 +398,72 @@ sys_close (uint32_t *esp)
   if (fd < cur->next_fd)
     cur->next_fd = fd;
 
+}
+
+static mapid_t
+sys_mmap (uint32_t *esp)
+{
+  int fd = get_arg_int (esp, 1);
+  void *addr = get_arg_buffer (esp, 2, 0);
+  mapid_t ret = SYSCALL_ERROR;
+  struct thread *cur = thread_current ();
+  
+  struct file *fp;
+  off_t file_len;
+  int pg_cnt;
+
+  /* Any issues with file descriptors. */
+  if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO || 
+      cur->next_fd == -1)
+    goto done;
+  
+  cur = thread_current ();
+  fp = cur->fdtable[fd];
+  if (fp == NULL)
+    goto done;
+  
+  if (!is_valid_address (addr) || pg_ofs (addr) != 0)
+    goto done;
+
+  lock_acquire (&filesys_lock);
+  file_len = file_length (fp);
+  lock_release (&filesys_lock);
+
+  if (!is_user_vaddr (addr + file_len))
+    goto done;
+
+  pg_cnt = (pg_round_up (addr + file_len) - addr) / PGSIZE;
+  for (int pg = 0; pg < pg_cnt; pg++ )
+    {
+      /* Check not already mapped. */
+      if (spt_find (addr + (pg * PGSIZE)) != NULL)
+        goto done;
+    }
+
+  lock_acquire (&filesys_lock);
+  fp = file_reopen (fp);
+  lock_release (&filesys_lock);
+  
+  if (fp == NULL)
+    goto done;
+  
+  if (!spt_try_add_mmap_file (addr, fp, pg_cnt, file_len % PGSIZE))
+    {
+      spt_remove_upages (addr, pg_cnt);
+      goto done;
+    }
+
+  ret = mmap_insert (addr, pg_cnt);
+
+  done:
+    return ret;
+}
+
+static void
+sys_munmap (uint32_t *esp)
+{
+  mapid_t mapid = get_arg_int (esp, 1);
+  munmap (mapid);
 }
 
 /* Returns the int at position POS on stack pointed at
