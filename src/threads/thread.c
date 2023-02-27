@@ -15,6 +15,7 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #include "vm/page.h"
+#include "vm/mmap.h"
 #include <hash.h>
 #endif
 
@@ -345,6 +346,7 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
+  if (cur == initial_thread)
   process_exit ();
 #endif
 
@@ -661,7 +663,8 @@ init_child (struct thread *t)
       t->exit_info = exit_info;
 
 #ifdef VM
-      hash_init (&t->spt, page_hash, page_less, NULL);
+      hash_init (&t->spt, spt_hash, spt_less, NULL);
+      hash_init (&t->mmap_table, mmap_hash, mmap_less, NULL);
 #endif
     }
   return true;
@@ -836,6 +839,22 @@ thread_compare_priority (const struct list_elem *a,
   struct thread *t1 = list_entry (a, struct thread, elem);
   struct thread *t2 = list_entry (b, struct thread, elem);
   return t1->priority < t2->priority;
+}
+
+void
+thread_update_next_fd (struct thread *t)
+{
+  int next_fd = EXEC_FD + 1;
+  for (; next_fd < MAX_FILES; next_fd++) 
+    {
+      if (t->fdtable[next_fd] == NULL)
+      {
+        t->next_fd = next_fd;
+        return;
+      }
+    }
+
+  t->next_fd = -1;
 }
 
 

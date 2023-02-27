@@ -170,7 +170,8 @@ struct thread
    struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
    struct child_exit_info *exit_info;  /* Thread's exit information shared with
                                           parent. */
-   struct hash spt;          /* Page Table*/
+   struct hash spt;                    /* Supplmentary Page Table*/
+   struct hash mmap_table;             /* Memory map table. */
 #endif
 
     /* Owned by thread.c. */
@@ -223,5 +224,7 @@ int thread_max_waiting_priority (struct thread *);
 bool thread_compare_priority (const struct list_elem *a,
                           const struct list_elem *b,
                           void *aux UNUSED);
+
+void thread_update_next_fd (struct thread *t);
 
 #endif /* threads/thread.h */
