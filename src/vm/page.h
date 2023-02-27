@@ -5,17 +5,16 @@
 #include "filesys/file.h"
 #include "filesys/off_t.h"
 
-/* The the type of page that the supplementary page table entry represents.
-   This is relevant information when decided where to write to memory and what
-   to clean up when evicting and removing pages from the supplementary page
-   table.
-        - EXEC pages are never written back to disk. It is written to swap if 
-        the page is dirty. If it isn't dirty, it is only every read back from
-        the filesys after eviction.
-        -MMAP pages is written back only to the filesys and only if the page
-        is dirty. Otherwise it is just read from filesys.
-        - TMP data is local data only used for the duration of the user process.
-        It is stored in SWAP whenever evicted / before lazy loaded and
+/* The type of page that the supplementary page table entry represents.
+   Used when deciding where to write to memory and what to clean up when
+   evicting and removing pages from the spt.
+        - EXEC pages are never written back to disk. Written to swap if 
+        the page is dirty. If it isn't dirty, it is read back from filesys 
+        after eviction.
+        -MMAP pages are written back to the filesys if and only if the page
+        is dirty. Otherwise they are just read from filesys.
+        - TMP data is local data to the user process e.g. the stack.
+        It is stored in SWAP whenever evicted / before lazy loading and
         discarded once the process exits. */
 enum page_type
     {
@@ -53,19 +52,17 @@ union disk_info
         struct filesys_info filesys_info;
     };
 
-/* Supplementary page table entry. Each thread has its own supplementary page
-   table and each entry is indexed by the unique user virtual page `upage`.
-   This table contains the information to correctly page out to disk as well
+/* Supplementary page table entry. Each thread has its own SPT and each entry
+   is indexed by the unique user virtual page `upage`.
+   SPT contains the information to correctly page out to disk as well
    as clean up resources when a the page is freed.
 
    The `filesys_page` member says where the page is currently or was most
    recently stored (depending on whether it is currently `in_memory` or not).
-   `disk_info` describes describes the pertinent information to load a page
-   from disk and is interpreted based on the `type` of page it is and
-   what the `filesys_page` bit. The
-   `writable` member desribes how the page table entry's writable bit should
-   be initialized when the page is loaded from disk. Finally the `hash_elem`
-   is the element of the supplementary page table (a hash table). */
+   `disk_info` is the pertinent information to load a page from disk and is 
+   interpreted based on the `type` of page it is and what the `filesys_page`
+   bit. Finally the `hash_elem` is the element of the supplementary page table
+   */
 
 struct spte
     {
