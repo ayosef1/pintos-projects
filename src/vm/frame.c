@@ -18,10 +18,16 @@ static struct fte *frame_lookup (void *kpage);
 
 /* Initializes Frame Table to allow for paging. */
 void
-frame_table_init()
+frame_table_init (void)
 {
     hash_init (&frame_table, frame_hash, frame_less, NULL);
     lock_init(&frame_lock);
+}
+
+/* Destroys frame table by freeing memory associated with hash table. */
+void frame_table_destroy (void)
+{
+    hash_destroy (&frame_table, NULL);
 }
 
 /* Returns a new frame for the user process. It first tries to acquire a
