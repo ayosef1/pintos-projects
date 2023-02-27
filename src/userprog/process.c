@@ -539,11 +539,8 @@ setup_stack (void **esp, char *exec_name, char *save_ptr)
     return false;
 
   uint8_t * stack_upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
-  union disk_info empty_disk_info;
-
-  success = spt_try_add_upage (stack_upage, TMP, true, false, &empty_disk_info);
-  if (success)
-    success = install_page (stack_upage, kpage, true);
+  
+  success = spt_try_add_stack_page (stack_upage, kpage);
   if (success)
     *esp = PHYS_BASE;
   else

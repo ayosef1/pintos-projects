@@ -90,6 +90,28 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
   return true;
 }
 
+/* Attempt to add a stack page with user virtual page UPAGE to the 
+   supplementary page table and adding a mapping to the current 
+   thread's page table from UPAGE to kernel virtual page KPAGE. */
+bool
+spt_try_add_stack_page (void *upage, void *kpage)
+{
+  union disk_info empty_disk_info;
+  if (spt_try_add_upage (upage, TMP, true, false, &empty_disk_info))
+    {
+        struct thread *t = thread_current ();
+
+        /* Verify that there's not already a page at that virtual
+           address, then map our page there. */
+        if (pagedir_get_page (t->pagedir, upage) == NULL
+                && pagedir_set_page (t->pagedir, upage, kpage, true))
+                return true;
+        else
+            spt_remove_upages (upage, 1);
+    }
+  return false;
+}
+
 /* Removes PG_CNT consecutive user virtual pages from the current thread's
    supplementary page table starting from BEGIN_UPAGE. This is specifically
    when a process is done with certain virtual pages, for example, when it
@@ -216,7 +238,6 @@ spt_evict_upage (void *upage)
             break;
     }
     spte->in_memory = false;
-
 }
 
 /* Looks up UPAGE page in a supplemental page table HASH.

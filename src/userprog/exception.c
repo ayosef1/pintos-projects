@@ -17,7 +17,6 @@ static long long page_fault_cnt;
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
 static bool valid_stack_growth (void* esp, void* fault_addr);
-static bool install_page (void *upage, void *kpage, bool writable);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -117,9 +116,7 @@ kill (struct intr_frame *f)
     }
 }
 
-/* Page fault handler.  This is a skeleton that must be filled in
-   to implement virtual memory.  Some solutions to project 2 may
-   also require modifying this code.
+/* Page fault handler.
 
    At entry, the address that faulted is in CR2 (Control Register
    2) and information about the fault, formatted as described in
@@ -163,6 +160,7 @@ page_fault (struct intr_frame *f)
   // Check if page exists in the supplemental page table?
   if (is_user_vaddr (fault_addr))
     {
+      bool success = false;
       if (!not_present)
          exit (-1);
       void *kpage = frame_get_page (PAL_USER | PAL_ZERO);
@@ -171,17 +169,19 @@ page_fault (struct intr_frame *f)
 
       if (valid_stack_growth(f->esp, fault_addr))
          {
-            if (install_page (fault_page, kpage, true))
-               return;
+            if (spt_try_add_stack_page (fault_page, kpage))
+               success = true;
          }
       else if (spt_load_upage (fault_page, kpage))
          {
-            return;
+            success = true;
          }
-      else 
-         {
-            exit (-1);
-         }
+
+      if (success)
+         return;
+      
+      frame_free_page  (kpage);
+      exit (-1);
     }
 
     if (!not_present)
@@ -201,19 +201,9 @@ page_fault (struct intr_frame *f)
  static bool
  valid_stack_growth (void* esp, void* fault_addr)
  {
-     if (fault_addr < (esp - 32)) {
+     if (fault_addr < (esp - 32) || fault_addr == NULL || 
+         pg_round_down (fault_addr) < PHYS_BASE - MAX_STACK_SIZE) {
        return false;
      }
      return true;
- }
-
-static bool
-install_page (void *upage, void *kpage, bool writable)
- {
-   struct thread *t = thread_current ();
-
-   /* Verify that there's not already a page at that virtual
-      address, then map our page there. */
-   return (pagedir_get_page (t->pagedir, upage) == NULL
-           && pagedir_set_page (t->pagedir, upage, kpage, writable));
  }

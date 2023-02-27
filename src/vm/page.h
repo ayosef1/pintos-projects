@@ -5,6 +5,9 @@
 #include "filesys/file.h"
 #include "filesys/off_t.h"
 
+/* User stack limited to 1MB. */
+#define MAX_STACK_SIZE 1024 * 1024
+
 /* The type of page that the supplementary page table entry represents.
    Used when deciding where to write to memory and what to clean up when
    evicting and removing pages from the spt.
@@ -81,6 +84,7 @@ bool spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
                         bool filesys_page, union disk_info *disk_info);
 bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
                             size_t final_read_bytes);
+bool spt_try_add_stack_page (void *upage, void *kpage);
 void spt_remove_upages (void * begin_upage, int num_pages);
 void spt_evict_upage (void *upage);
 bool spt_load_upage (void *upage, void *kpage);
