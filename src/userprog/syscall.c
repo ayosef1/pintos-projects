@@ -14,6 +14,8 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
+#include "vm/page.h"
+#include "vm/mmap.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -54,7 +56,7 @@ syscall_handler (struct intr_frame *f)
   uint32_t syscall_num;
 
   if (!is_valid_address (f->esp))
-    exit (-1);
+    exit (SYSCALL_ERROR);
 
   syscall_num = get_arg_int(f->esp, 0);
   switch (syscall_num)
@@ -99,7 +101,7 @@ syscall_handler (struct intr_frame *f)
       sys_close (f->esp);
       break;
     default:
-      exit (-1);
+      exit (SYSCALL_ERROR);
   }
 }
 
@@ -198,25 +200,14 @@ sys_open (uint32_t *esp)
   cur = thread_current ();
   /* File open unsuccessful or file limit hit */
   if (fp == NULL || cur->next_fd < 0)
-    return -1;
+    return SYSCALL_ERROR;
 
   ret = cur->next_fd;
   cur->fdtable[ret] = fp;
   
   /* Find next available fd */
-  int new_fd = EXEC_FD + 1;
-  for (; new_fd < MAX_FILES; new_fd++) 
-    {
-      if (cur->fdtable[new_fd] == NULL)
-      {
-        cur->next_fd = new_fd;
-        return ret;
-      }
-    }
-
-  cur->next_fd = -1;
+  thread_update_next_fd (cur);
   return ret;
-
 }
 
 int
@@ -228,11 +219,11 @@ sys_filesize (uint32_t *esp)
   fd = get_arg_int (esp, 1);
 
   if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
-    exit (-1);
+    exit (SYSCALL_ERROR);
   
   struct file *file = thread_current ()->fdtable[fd];
 	if (file == NULL)
-		exit (-1);
+		exit (SYSCALL_ERROR);
   
   lock_acquire (&filesys_lock);
 	size = file_length (file);
@@ -256,7 +247,7 @@ sys_read (uint32_t *esp)
 
   if (!is_valid_fd (fd) || fd == STDOUT_FILENO)
     {
-      return -1;
+      return SYSCALL_ERROR;
     }
   else if (fd == STDIN_FILENO)
     {
@@ -272,7 +263,7 @@ sys_read (uint32_t *esp)
         struct file *fp = cur->fdtable[fd];
 
         if (fp == NULL)
-          return -1;
+          return SYSCALL_ERROR;
 
         lock_acquire (&filesys_lock);
         bytes_read = file_read (fp, buffer, size);
@@ -299,7 +290,7 @@ sys_write (uint32_t *esp)
 
   if (!is_valid_fd (fd) || fd == STDIN_FILENO)
     {
-      bytes_written = -1;
+      bytes_written = SYSCALL_ERROR;
     }
   else if (fd == STDOUT_FILENO)
     {
@@ -318,7 +309,7 @@ sys_write (uint32_t *esp)
       struct file *fp = cur->fdtable[fd];
 
       if (fp == NULL) 
-        return -1;
+        return SYSCALL_ERROR;
 
       lock_acquire (&filesys_lock);
       bytes_written = file_write(fp, buffer, size);
@@ -340,7 +331,7 @@ sys_seek (uint32_t *esp)
   cur = thread_current ();
 
   if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
-    exit (-1);
+    exit (SYSCALL_ERROR);
   
   file_seek (cur->fdtable[fd], pos);
 }
@@ -355,7 +346,7 @@ sys_tell (uint32_t *esp)
   cur = thread_current ();
 
   if (cur->fdtable[fd] == NULL)
-    exit (-1);
+    exit (SYSCALL_ERROR);
 
   return file_tell (cur->fdtable[fd]);
 }
@@ -397,7 +388,7 @@ get_arg_int (void *esp, int pos)
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
   if (!is_valid_memory (arg, sizeof (int)))
-    exit (-1);
+    exit (SYSCALL_ERROR);
 
   return *(int *)arg;
 }
@@ -414,7 +405,7 @@ get_arg_buffer (void *esp, int pos, int size)
   arg = (void **)esp + pos;
   
   if (!is_valid_memory (arg, sizeof(char *)) || !is_valid_memory (*arg, size))
-    exit (-1);
+    exit (SYSCALL_ERROR);
 
   return *(void **)arg;
 }
@@ -434,7 +425,7 @@ get_arg_string (void *esp, int pos, int limit)
 
   /* Check the bytes of the char * are all in valid memory */
   if (!is_valid_memory (str_ptr, sizeof (char *)))
-    exit (-1);
+    exit (SYSCALL_ERROR);
 
   end = *str_ptr + limit + 1;
 
@@ -442,7 +433,7 @@ get_arg_string (void *esp, int pos, int limit)
   for (cur = *str_ptr; cur < end; cur++)
     {
       if (!is_valid_address (cur))
-        exit (-1);
+        exit (SYSCALL_ERROR);
       
       if (*cur == '\0')
         break;
