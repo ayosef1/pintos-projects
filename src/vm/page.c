@@ -191,7 +191,7 @@ spt_load_upage (void *upage, void *kpage)
     pagedir_set_accessed (pd, upage, true);
     pagedir_set_dirty (pd, upage, false);
 
-    frame_set_upage (kpage, upage);
+    frame_set_udata (kpage, upage, pd, spte);
     spte->in_memory = true;
     return true;
 

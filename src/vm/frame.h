@@ -21,11 +21,17 @@
    `hash_elem` is the element in the frame table. */
 struct fte
     {
+        /* 
+           Instead of tid want to include pagedir pointer
+           and pointer to relevant spte. This is all for speed.
+        */
         void *kpage;                    /* The frame's kernel virtual page 
                                            number. */ 
         void *upage;                    /* User Virtual Address of associated
                                            with the frame. */
-        tid_t tid;                      /* TID of owner of frame */
+        uint32_t *pd;                   /* Pagedirectory of owner thread. */
+        struct spte *spte;              /* Supplementary page table entry
+                                           of owner. */
         bool pinned;                    /* If the frame can be evicted. */
         struct hash_elem hash_elem;     /* Frame Table element */
     };
@@ -34,6 +40,7 @@ void frame_table_init (void);
 void frame_table_destroy (void);
 void *frame_get_page (enum palloc_flags flags);
 void frame_free_page (void *kpage);
-void frame_set_upage (void *kpage, void *upage);
+void frame_set_udata (void *kpage, void *upage, uint32_t *pd,
+                      struct spte *spte);
 
 #endif /* vm/frame.h */

@@ -68,12 +68,14 @@ frame_free_page (void *kpage)
 /* Sets the user virtual addres of frame, whose kernel virtual address is
    KPAGE's, to UPAGE */
 void 
-frame_set_upage (void *kpage, void *upage)
+frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte)
 {
     struct fte *fte = frame_lookup (kpage);
     if (fte == NULL)
         return;
     fte->upage = upage;
+    fte->pd = pd;
+    fte->spte = spte;
     /* TODO: Maybe also unpin here when do eviction */
 }
 
@@ -87,7 +89,6 @@ insert_frame (struct fte * fte, void * kpage)
     fte->pinned = true;
     fte->upage = NULL;
     fte->kpage = kpage;
-    fte->tid = thread_current ()->tid;
 
     lock_acquire (&frame_lock);
     hash_insert (&frame_table, &fte->hash_elem);
