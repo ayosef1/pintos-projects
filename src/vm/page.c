@@ -204,10 +204,9 @@ spt_load_upage (void *upage, void *kpage)
    eviction once an evicted page has been selected by our eviction
    algorithm. After this function we would write over the upage. */
 void 
-spt_evict_upage (void *upage)
+spt_evict_upage (void *upage, uint32_t *pd)
 {
 
-    struct thread * cur = thread_current ();
     struct spte *spte = spt_find (upage);
     if (spte == NULL)
         return;
@@ -217,7 +216,7 @@ spt_evict_upage (void *upage)
     {
         case (MMAP):
             /* Only need to write if MMAP is written. */
-            if (pagedir_is_dirty(cur->pagedir, upage))
+            if (pagedir_is_dirty(pd, upage))
                 {
                     /* Write back to memory. */
                     lock_acquire (&filesys_lock);
@@ -230,7 +229,7 @@ spt_evict_upage (void *upage)
             /* If an executable page has never been written to, do nothing.
                Otherwise write to swap. */
             if (spte->filesys_page && (!spte->disk_info.filesys_info.writable ||
-                !pagedir_is_dirty(cur->pagedir, upage)))
+                !pagedir_is_dirty(pd, upage)))
                 break;
         default:
             spte->filesys_page = false; 
