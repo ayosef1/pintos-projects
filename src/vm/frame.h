@@ -34,6 +34,7 @@ struct fte
                                            of owner. */
         bool pinned;                    /* If the frame can be evicted. */
         struct hash_elem hash_elem;     /* Frame Table element */
+        struct list_elem clock_elem;    /* Clock Algorihtm list element*/
     };
 
 void frame_table_init (void);
@@ -42,5 +43,7 @@ void *frame_get_page (enum palloc_flags flags);
 void frame_free_page (void *kpage);
 void frame_set_udata (void *kpage, void *upage, uint32_t *pd,
                       struct spte *spte);
+void *frame_evict (void);
+void move_clock_hand (void);
 
 #endif /* vm/frame.h */
