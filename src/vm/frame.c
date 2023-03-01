@@ -188,10 +188,6 @@ void *frame_evict (void)
         if (list_empty(&clock_algorithm_list))
             continue;
         struct fte *entry = list_entry(hand, struct fte, clock_elem);
-        if (entry == NULL)
-            PANIC("entry was null");
-        if (entry->kpage == NULL)
-            PANIC("kpage was null");
         /* If the hand is pinned, skip it. */
         if (!entry->pinned) {
             move_clock_hand();
