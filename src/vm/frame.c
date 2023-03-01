@@ -1,47 +1,39 @@
-#include <hash.h>
 #include "threads/synch.h"
 #include "threads/palloc.h"
 #include "threads/malloc.h"
 #include "vm/frame.h"
 #include "vm/page.h"
+#include "vm/swap.h"
 #include "userprog/pagedir.h"
 
 /* Frame table */
-static struct hash frame_table;
+static struct list frame_table;
 /* Sync for frame table */
 static struct lock frame_lock;
-/* Sync for clock algorithm list */
-static struct lock clock_lock;
-/* Clock Algorithm List*/
-static struct list clock_algorithm_list;
 /* Clock Algorithm Hand */
 static struct list_elem *hand; 
 
 static void insert_frame (struct fte * fte, void * kpage);
 static bool delete_frame (void * vaddr);
-static unsigned frame_hash (const struct hash_elem *fte_, void *aux UNUSED);
-static bool frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
-                        void *aux UNUSED);
 static struct fte *frame_lookup (void *kpage);
 
 /* Initializes Frame Table to allow for paging. */
 void
 frame_table_init (void)
 {
-    hash_init (&frame_table, frame_hash, frame_less, NULL);
-    list_init (&clock_algorithm_list);
-    lock_init(&frame_lock);
-    lock_init(&clock_lock);
-    hand = list_begin(&clock_algorithm_list);
+    list_init (&frame_table);
+    lock_init (&frame_lock);
+    hand = list_begin(&frame_table);
 }
 
-/* Destroys frame table by freeing memory associated with hash table. */
+/* Destroys frame table by freeing memory associated with list. */
 void frame_table_destroy (void)
 {
-    while (!list_empty(&clock_algorithm_list)) {
-        list_pop_front(&clock_algorithm_list);
+    while (!list_empty(&frame_table)) {
+        struct list_elem *e = list_pop_front(&frame_table);
+        struct fte *fte = list_entry(e, struct fte, elem);
+        free(fte);
     }
-    hash_destroy (&frame_table, NULL);
 }
 
 /* Returns a new frame for the user process. It first tries to acquire a
@@ -56,14 +48,16 @@ frame_get_page (enum palloc_flags flags)
     kpage = palloc_get_page (flags);
     if (kpage == NULL)
     {
-        /* Implement eviction here that will 
-            a) Use clock to find correct page to evict
-            b) Unload using an spte function
-                i) Unload data to correct location in memory 
-                ii) Set pagedir to have PTE_P as 0*/
+        /* Use clock to find correct page to evict */
+        lock_acquire(&frame_lock);
         kpage = frame_evict ();
+        lock_release (&frame_lock);
         if (kpage == NULL)
-            PANIC ("Eviction Incurred an Error");
+            PANIC ("Eviction Didn't Find Page");
+        /* Unload using an spte function
+            i) Unload data to correct location in memory 
+            ii) Set pagedir to have PTE_P as 0 */
+        PANIC("Yet to implement the unloading");
         delete_frame (kpage);
     }
     fte = malloc (sizeof (struct fte));
@@ -108,12 +102,11 @@ insert_frame (struct fte * fte, void * kpage)
     fte->upage = NULL;
     fte->kpage = kpage;
 
+    /* Possibly add the new frame right before the clock hand so that it
+        gets a long shot */
     lock_acquire (&frame_lock);
-    hash_insert (&frame_table, &fte->hash_elem);
+    list_push_back (&frame_table, &fte->elem);
     lock_release (&frame_lock);
-    lock_acquire (&clock_lock);
-    list_push_back (&clock_algorithm_list, &fte->clock_elem);
-    lock_release (&clock_lock);
 }
 
 /* Removes the frame table entry that corresponds whose physical address 
@@ -131,12 +124,10 @@ delete_frame (void * kpage)
             lock_release (&frame_lock);
             return false;
         }
-    hash_delete (&frame_table, &fte->hash_elem);
-    lock_release (&frame_lock);
-    lock_acquire (&clock_lock);
-    list_remove (&fte->clock_elem);
-    lock_release (&clock_lock);
+    list_remove (&fte->elem);
     free (fte);
+    lock_release (&frame_lock);
+    
     return true;
 }
 
@@ -146,37 +137,23 @@ delete_frame (void * kpage)
 struct fte *
 frame_lookup (void *kpage)
 {
-  struct fte f;
-  struct hash_elem *e;
+    struct fte *f;
+    struct list_elem *e;
 
-  f.kpage = kpage;
-  e = hash_find (&frame_table, &f.hash_elem);
-  return e != NULL ? hash_entry (e, struct fte, hash_elem) : NULL;
-}
-
-/* Returns a hash value for a frame f. */
-static unsigned
-frame_hash (const struct hash_elem *fte_, void *aux UNUSED)
-{
-  const struct fte *fte = hash_entry (fte_, struct fte, hash_elem);
-  return hash_int ((unsigned)fte->kpage);
-}
-
-/* Returns true if a frame a preceds frame b. */
-static bool
-frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
-            void *aux UNUSED)
-{
-  const struct fte *a = hash_entry (a_, struct fte, hash_elem);
-  const struct fte *b = hash_entry (b_, struct fte, hash_elem);
-  
-  return a->kpage < b->kpage;
+    e = list_head (&frame_table);
+    while ((e = list_next (e)) != list_end (&frame_table)) 
+    {
+        f = list_entry(e, struct fte, elem);
+        if (f->kpage == kpage)
+            return f;
+    }
+    return NULL;
 }
 
 
 void move_clock_hand (void) {
-    if (list_tail(&clock_algorithm_list) == hand) 
-        hand = list_begin (&clock_algorithm_list);
+    if (list_tail(&frame_table) == hand) 
+        hand = list_begin (&frame_table);
     else
         hand = list_next(hand);
     return;
@@ -184,14 +161,18 @@ void move_clock_hand (void) {
 
 void *frame_evict (void) 
 {
+    //return NULL;
     while (true) {
-        if (list_empty(&clock_algorithm_list))
+        if (list_empty(&frame_table))
             continue;
-        struct fte *entry = list_entry(hand, struct fte, clock_elem);
-        /* If the hand is pinned, skip it. */
+        struct fte *entry = list_entry(hand, struct fte, elem);
+        /* If the hand is pinned, skip it. We must account for frame table 
+        entries that aren't completely set up */
         if (!entry->pinned) {
             move_clock_hand();
         } else {
+            if (pagedir_get_page(entry->pd, entry->upage) == NULL)
+                PANIC("not in pagedir");
             /* Check if the page is accessed. */
             if (pagedir_is_accessed(entry->pd, entry->upage)) {
                 /* If it is accessed, clear the accessed bit and move the hand 
@@ -201,7 +182,7 @@ void *frame_evict (void)
             } else {
                 /* Evict the frame and return the kernel virtual address of the
                  evicted page. */
-                spt_evict_upage (entry->upage);
+                spt_evict_upage (entry->upage, entry->pd);
                 //entry->pd.PTE_P = 0;
                 move_clock_hand();
                 return entry->kpage;

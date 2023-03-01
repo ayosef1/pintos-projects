@@ -1,7 +1,7 @@
 #ifndef VM_FRAME_H
 #define VM_FRAME_H
 
-#include <hash.h>
+#include <list.h>
 #include "threads/palloc.h"
 #include "threads/thread.h"
 
@@ -33,8 +33,7 @@ struct fte
         struct spte *spte;              /* Supplementary page table entry
                                            of owner. */
         bool pinned;                    /* If the frame can be evicted. */
-        struct hash_elem hash_elem;     /* Frame Table element */
-        struct list_elem clock_elem;    /* Clock Algorihtm list element*/
+        struct list_elem elem;          /* Frame Table list element*/
     };
 
 void frame_table_init (void);
