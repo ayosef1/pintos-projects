@@ -174,6 +174,10 @@ struct thread
    struct hash mmap_table;             /* Memory map table. */
 #endif
 
+#ifdef VM
+   bool in_syscall;
+#endif
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };

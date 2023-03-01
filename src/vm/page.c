@@ -94,10 +94,13 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
    supplementary page table and adding a mapping to the current 
    thread's page table from UPAGE to kernel virtual page KPAGE. */
 bool
-spt_try_add_stack_page (void *upage, void *kpage)
+spt_try_add_stack_page (void *upage)
 {
-  union disk_info empty_disk_info;
-  if (spt_try_add_upage (upage, TMP, true, false, &empty_disk_info))
+    void *kpage;
+    union disk_info empty_disk_info;
+
+    kpage = frame_get_page (PAL_USER | PAL_ZERO);
+    if (spt_try_add_upage (upage, TMP, true, false, &empty_disk_info))
     {
         struct thread *t = thread_current ();
 
@@ -109,7 +112,8 @@ spt_try_add_stack_page (void *upage, void *kpage)
         else
             spt_remove_upages (upage, 1);
     }
-  return false;
+    frame_free_page (kpage);
+    return false;
 }
 
 /* Removes PG_CNT consecutive user virtual pages from the current thread's
@@ -152,13 +156,16 @@ spt_remove_upages (void * begin_upage, int num_pages)
 /* Loading the current thread's virtual page UPAGE into the frame KPAGE
    using information from the current thread's supplementary page table. */
 bool
-spt_load_upage (void *upage, void *kpage)
+spt_load_upage (void *upage)
 {
     ASSERT (pg_ofs (upage) == 0);
 
+    void *kpage;
     uint32_t *pd;
     struct spte *spte;
     union disk_info disk_info;
+
+    kpage = frame_get_page (PAL_USER | PAL_ZERO);
 
     pd = thread_current ()->pagedir;
     pagedir_clear_page (pd, upage);
@@ -166,7 +173,6 @@ spt_load_upage (void *upage, void *kpage)
     spte = spt_find (upage);
     if (spte == NULL)
         goto fail;
-
 
     bool writable = true;
     if (spte->type == EXEC)

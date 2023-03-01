@@ -163,24 +163,24 @@ page_fault (struct intr_frame *f)
       bool success = false;
       if (!not_present)
          exit (-1);
-      void *kpage = frame_get_page (PAL_USER | PAL_ZERO);
-      if (kpage == NULL)
-         PANIC ("Unable to acquire page");
 
       if (valid_stack_growth(f->esp, fault_addr))
          {
-            if (spt_try_add_stack_page (fault_page, kpage))
+            if (spt_try_add_stack_page (fault_page))
                success = true;
          }
-      else if (spt_load_upage (fault_page, kpage))
+      else if (spt_load_upage (fault_page))
          {
             success = true;
          }
 
       if (success)
+      {
+         if (!thread_current ()->in_syscall)
+            frame_unpin (fault_addr);
          return;
+      }
       
-      frame_free_page  (kpage);
       exit (-1);
     }
 

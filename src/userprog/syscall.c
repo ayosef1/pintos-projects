@@ -14,6 +14,7 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
+#include "vm/frame.h"
 #include "vm/page.h"
 #include "vm/mmap.h"
 
@@ -55,12 +56,16 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {
+  struct thread *cur;
   uint32_t syscall_num;
+
+  cur = thread_current ();
+  cur->in_syscall = true;
 
   if (!is_valid_address (f->esp))
     exit (SYSCALL_ERROR);
 
-  syscall_num = get_arg_int(f->esp, 0);
+  syscall_num = get_arg_int (f->esp, 0);
   switch (syscall_num)
   {
     case SYS_HALT:
@@ -71,46 +76,60 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_EXEC:
       f->eax = sys_exec (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_WAIT:
       f->eax = sys_wait (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_CREATE:
       f->eax = sys_create (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_REMOVE:
       f->eax = sys_remove (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_OPEN:
       f->eax = sys_open (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_FILESIZE:
       f->eax = sys_filesize (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_READ:
       f->eax = sys_read (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_WRITE:
       f->eax = sys_write (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_SEEK:
       sys_seek (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_TELL:
       f->eax = sys_tell (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_CLOSE:
       sys_close (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_MMAP:
       f->eax = sys_mmap (f->esp);
+      cur->in_syscall = false;
       break;
     case SYS_MUNMAP:
       sys_munmap (f->esp);
+      cur->in_syscall = false;
       break;
     default:
       exit (SYSCALL_ERROR);
   }
+  frame_unpin (f->esp);
 }
 
 /* Interface to the exit syscall to allow the page fault exception handler
@@ -133,13 +152,13 @@ void munmap (mapid_t mapid)
   mmap_remove (mapid);
 }
 
-void
+static void
 sys_halt ()
 {
   shutdown_power_off ();
 }
 
-void
+static void
 sys_exit (uint32_t *esp)
 {
   int status;
@@ -147,19 +166,23 @@ sys_exit (uint32_t *esp)
   exit (status);
 }
 
-pid_t
+static pid_t
 sys_exec (uint32_t *esp)
 {
+  pid_t pid;
   char *cmd_line;
 
   cmd_line = get_arg_string (esp, 1, CMD_LINE_MAX);
+  
   if (cmd_line == NULL)
     return TID_ERROR;
   
-  return process_execute (cmd_line);
+  pid = process_execute (cmd_line);
+  frame_unpin (cmd_line);
+  return pid;
 }
 
-int
+static int
 sys_wait (uint32_t *esp)
 {
   pid_t pid;
@@ -169,7 +192,7 @@ sys_wait (uint32_t *esp)
   return process_wait (pid);
 }
 
-bool
+static bool
 sys_create (uint32_t *esp)
 {
   bool ret;
@@ -184,10 +207,11 @@ sys_create (uint32_t *esp)
   lock_acquire (&filesys_lock);
   ret = filesys_create (fname, initial_size);
   lock_release (&filesys_lock);
+  frame_unpin (fname);
   return ret;
 }
 
-bool
+static bool
 sys_remove (uint32_t *esp)
 {
   bool ret;
@@ -200,10 +224,11 @@ sys_remove (uint32_t *esp)
   lock_acquire (&filesys_lock);
   ret = filesys_remove (fname);
   lock_release (&filesys_lock);
+  frame_unpin (fname);
   return ret;
 }
 
-int
+static int
 sys_open (uint32_t *esp)
 {
   int ret;
@@ -218,6 +243,8 @@ sys_open (uint32_t *esp)
   struct file *fp = filesys_open (fname);
   lock_release (&filesys_lock);
 
+  frame_unpin (fname);
+
   cur = thread_current ();
   /* File open unsuccessful or file limit hit */
   if (fp == NULL || cur->next_fd < 0)
@@ -231,7 +258,7 @@ sys_open (uint32_t *esp)
   return ret;
 }
 
-int
+static int
 sys_filesize (uint32_t *esp)
 {
   int fd;
@@ -253,7 +280,7 @@ sys_filesize (uint32_t *esp)
   return size;
 }
 
-int
+static int
 sys_read (uint32_t *esp)
 {
 
@@ -354,12 +381,15 @@ sys_seek (uint32_t *esp)
   if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
     exit (SYSCALL_ERROR);
   
+  lock_acquire (&filesys_lock);
   file_seek (cur->fdtable[fd], pos);
+  lock_release (&filesys_lock);
 }
 
 static unsigned
 sys_tell (uint32_t *esp)
 {
+  int ret;
   int fd;
   struct thread *cur;
 
@@ -369,7 +399,11 @@ sys_tell (uint32_t *esp)
   if (cur->fdtable[fd] == NULL)
     exit (SYSCALL_ERROR);
 
-  return file_tell (cur->fdtable[fd]);
+  lock_acquire (&filesys_lock);
+  ret = file_tell (cur->fdtable[fd]);
+  lock_release (&filesys_lock);
+
+  return ret;
 }
 
 static void
@@ -468,7 +502,7 @@ sys_munmap (uint32_t *esp)
 }
 
 /* Returns the int at position POS on stack pointed at
-   by ESP. Exits is any of int bytes are in invalid
+   by ESP. Exits if any of int bytes are in invalid
    memory. */
 static int
 get_arg_int (void *esp, int pos)

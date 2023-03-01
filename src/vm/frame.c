@@ -2,6 +2,8 @@
 #include "threads/synch.h"
 #include "threads/palloc.h"
 #include "threads/malloc.h"
+#include "threads/vaddr.h"
+#include "userprog/pagedir.h"
 #include "vm/frame.h"
 
 /* Frame table */
@@ -148,4 +150,32 @@ frame_less (const struct hash_elem *a_, const struct hash_elem *b_,
   const struct fte *b = hash_entry (b_, struct fte, hash_elem);
   
   return a->kpage < b->kpage;
+}
+
+bool
+frame_unpin (void *uaddr)
+{   
+    void *kpage;
+    struct fte *fte;
+    struct thread *cur;
+
+    cur = thread_current ();
+    kpage = pg_round_down (pagedir_get_page (cur->pagedir, uaddr));
+
+    lock_acquire (&frame_lock);
+    fte = frame_lookup (kpage);
+    if (fte == NULL)
+    {
+        lock_release (&frame_lock);
+        return false;
+    }
+    /* TODO: does it matter that we unpin an unpinned page??*/
+    if (!fte->pinned)
+    {
+        lock_release (&frame_lock);
+        return false;
+    }
+    fte->pinned = false;
+    lock_release (&frame_lock);
+    return true;
 }
