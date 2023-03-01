@@ -57,7 +57,7 @@ frame_get_page (enum palloc_flags flags)
         /* Unload using an spte function
             i) Unload data to correct location in memory 
             ii) Set pagedir to have PTE_P as 0 */
-        PANIC("Yet to implement the unloading");
+        //PANIC("Yet to implement the unloading");
         delete_frame (kpage);
     }
     fte = malloc (sizeof (struct fte));
@@ -88,6 +88,7 @@ frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte)
     fte->upage = upage;
     fte->pd = pd;
     fte->spte = spte;
+    fte->pinned = false;
     /* TODO: Maybe also unpin here when do eviction */
 }
 
@@ -161,14 +162,13 @@ void move_clock_hand (void) {
 
 void *frame_evict (void) 
 {
-    //return NULL;
     while (true) {
         if (list_empty(&frame_table))
             continue;
         struct fte *entry = list_entry(hand, struct fte, elem);
         /* If the hand is pinned, skip it. We must account for frame table 
         entries that aren't completely set up */
-        if (!entry->pinned) {
+        if (entry->pinned) {
             move_clock_hand();
         } else {
             if (pagedir_get_page(entry->pd, entry->upage) == NULL)
@@ -183,7 +183,6 @@ void *frame_evict (void)
                 /* Evict the frame and return the kernel virtual address of the
                  evicted page. */
                 spt_evict_upage (entry->upage, entry->pd);
-                //entry->pd.PTE_P = 0;
                 move_clock_hand();
                 return entry->kpage;
             }
