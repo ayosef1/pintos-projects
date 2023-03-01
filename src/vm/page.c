@@ -10,6 +10,7 @@
 #include "vm/page.h"
 #include "vm/swap.h"
 
+static void spt_destructor_fn (struct hash_elem *e, void * aux UNUSED);
 static bool install_file (void *kpage, struct filesys_info filesys_info);
 
 /* Stores the mapping from the user virtual address UPAGE to the
@@ -73,7 +74,7 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
         if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
                                 &disk_info))
             {
-                spt_remove_upages (begin_upage, pg);
+                spt_remove_mmap_pages (begin_upage, pg);
                 return false;
             }
         disk_info.filesys_info.ofs += PGSIZE;
@@ -81,10 +82,10 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
   
   /* Final case. */
   disk_info.filesys_info.page_read_bytes = final_read_bytes % PGSIZE;
-  if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, true, true,
+  if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
                           &disk_info))
     {
-        spt_remove_upages (begin_upage, pg);
+        spt_remove_mmap_pages (begin_upage, pg);
         return false;
     }
   return true;
@@ -106,18 +107,15 @@ spt_try_add_stack_page (void *upage, void *kpage)
         if (pagedir_get_page (t->pagedir, upage) == NULL
                 && pagedir_set_page (t->pagedir, upage, kpage, true))
                 return true;
-        else
-            spt_remove_upages (upage, 1);
     }
   return false;
 }
 
-/* Removes PG_CNT consecutive user virtual pages from the current thread's
-   supplementary page table starting from BEGIN_UPAGE. This is specifically
-   when a process is done with certain virtual pages, for example, when it
-   is exiting.  */
+/* Removes PG_CNT consecutive mmaped user virtual pages from the current 
+   thread's supplementary page table starting from BEGIN_UPAGE. This is used
+   on process exit or failed mmap calls. */
 void
-spt_remove_upages (void * begin_upage, int num_pages)
+spt_remove_mmap_pages (void * begin_upage, int num_pages)
 {
     struct hash * spt = &thread_current ()->spt;
     uint32_t *pd = thread_current ()->pagedir;
@@ -128,22 +126,16 @@ spt_remove_upages (void * begin_upage, int num_pages)
             spte = spt_find (cur_upage);
             if (spte == NULL)
                 continue;
-            /* Commit to file if a diry MMAP page. */
-            if (spte->in_memory)
+            /* Kind of want to lock here so no-one else can access. */
+            if (spte->in_memory && pagedir_is_dirty (pd, cur_upage))
                 {
-                    if (spte->type == MMAP && pagedir_is_dirty (pd, cur_upage))
-                        {
-
-                            lock_acquire (&filesys_lock);
-                            file_write_at (spte->disk_info.filesys_info.file,
-                                        cur_upage, PGSIZE,
-                                        spte->disk_info.filesys_info.ofs);
-                            lock_release (&filesys_lock);
-                        }
-                    frame_free_page (cur_upage);
+                    lock_acquire (&filesys_lock);
+                    file_write_at (spte->disk_info.filesys_info.file,
+                                cur_upage, PGSIZE,
+                                spte->disk_info.filesys_info.ofs);
+                    lock_release (&filesys_lock);
                 }
-            else if (!spte->filesys_page)
-                    swap_free (spte->disk_info.swap_id);
+            frame_free_page (cur_upage);
             hash_delete (spt, &spte->hash_elem);
             free (spte);
         }
@@ -204,20 +196,18 @@ spt_load_upage (void *upage, void *kpage)
    eviction once an evicted page has been selected by our eviction
    algorithm. After this function we would write over the upage. */
 void 
-spt_evict_upage (void *upage)
+spt_evict_upage (void *upage, uint32_t *pd, struct spte *spte)
 {
-
-    struct thread * cur = thread_current ();
-    struct spte *spte = spt_find (upage);
     if (spte == NULL)
         return;
-    
+    /* Acquire some sort of lock here. */
+    pagedir_clear_page (pd, upage);
     ASSERT (spte->in_memory);
     switch (spte->type)
     {
         case (MMAP):
             /* Only need to write if MMAP is written. */
-            if (pagedir_is_dirty(cur->pagedir, upage))
+            if (pagedir_is_dirty(pd, upage))
                 {
                     /* Write back to memory. */
                     lock_acquire (&filesys_lock);
@@ -230,7 +220,7 @@ spt_evict_upage (void *upage)
             /* If an executable page has never been written to, do nothing.
                Otherwise write to swap. */
             if (spte->filesys_page && (!spte->disk_info.filesys_info.writable ||
-                !pagedir_is_dirty(cur->pagedir, upage)))
+                !pagedir_is_dirty(pd, upage)))
                 break;
         default:
             spte->filesys_page = false; 
@@ -270,6 +260,19 @@ spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
   const struct spte *b = hash_entry (b_, struct spte, hash_elem);
   
   return a->upage < b->upage;
+}
+
+void
+spt_destructor_fn (struct hash_elem *e, void * aux UNUSED)
+{
+    struct spte *m = hash_entry (e, struct spte, hash_elem);
+    free (m);
+}
+
+void
+spt_destroy (void)
+{
+    hash_destroy (&thread_current ()->spt, &spt_destructor_fn);
 }
 
 static bool

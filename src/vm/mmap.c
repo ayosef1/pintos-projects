@@ -94,6 +94,6 @@ mmap_destructor_fn (struct hash_elem *e, void *aux UNUSED)
 {
     struct mmap_table_entry *m = hash_entry (e, struct mmap_table_entry,
                                                    hash_elem);
-    spt_remove_upages (m->begin_upage, m->pg_cnt);
+    spt_remove_mmap_pages (m->begin_upage, m->pg_cnt);
     free (m);
 }

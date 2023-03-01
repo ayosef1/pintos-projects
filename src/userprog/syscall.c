@@ -129,7 +129,7 @@ void munmap (mapid_t mapid)
   struct mmap_table_entry *entry = mmap_find (mapid);
   if (entry == NULL)
     return;
-  spt_remove_upages (entry->begin_upage, entry->pg_cnt);
+  spt_remove_mmap_pages (entry->begin_upage, entry->pg_cnt);
   mmap_remove (mapid);
 }
 
@@ -454,7 +454,7 @@ sys_mmap (uint32_t *esp)
 
   ret = mmap_insert (addr, pg_cnt);
   if (ret == -1)
-    spt_remove_upages (addr, pg_cnt);
+    spt_remove_mmap_pages (addr, pg_cnt);
 
   done:
     return ret;

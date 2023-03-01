@@ -85,10 +85,11 @@ bool spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
 bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
                             size_t final_read_bytes);
 bool spt_try_add_stack_page (void *upage, void *kpage);
-void spt_remove_upages (void * begin_upage, int num_pages);
-void spt_evict_upage (void *upage);
+void spt_remove_mmap_pages (void * begin_upage, int num_pages);
+void spt_evict_upage (void *upage, uint32_t *pd, struct spte *spte);
 bool spt_load_upage (void *upage, void *kpage);
 struct spte * spt_find (void *upage);
+void spt_destroy (void);
 unsigned spt_hash (const struct hash_elem *p_, void *aux UNUSED);
 bool spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
                 void *aux UNUSED);

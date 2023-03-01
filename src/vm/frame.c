@@ -41,15 +41,20 @@ frame_get_page (enum palloc_flags flags)
 
     kpage = palloc_get_page (flags);
     if (kpage == NULL)
-        /* Implement eviction here that will 
+    {
+        //kpage = frame_evict ()
+            /* Implement eviction here that will 
             a) Use clock to find correct page to evict
             b) Unload using an spte function
                 i) Unload data to correct location in memory 
                 ii) Set pagedir to have PTE_P as 0*/
         PANIC ("Eviction not implemented yet");
-    
-    fte = malloc (sizeof (struct fte));
-    insert_frame (fte, kpage);
+    }
+    else 
+        {
+            fte = malloc (sizeof (struct fte));
+            insert_frame (fte, kpage);
+        }
 
     return kpage;
 }
@@ -61,7 +66,6 @@ frame_free_page (void *kpage)
 {
     if (!delete_frame (kpage))
         return;
-
     palloc_free_page (kpage);
 }
 
@@ -70,18 +74,23 @@ frame_free_page (void *kpage)
 void 
 frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte)
 {
+
+    lock_acquire (&frame_lock);
     struct fte *fte = frame_lookup (kpage);
+    ASSERT (fte->pinned)
+    /* Don't need a lock here because no one accessing this data yet since
+       it is pinned. */
     if (fte == NULL)
         return;
     fte->upage = upage;
     fte->pd = pd;
     fte->spte = spte;
-    /* TODO: Maybe also unpin here when do eviction */
+    lock_release (&frame_lock);
 }
 
 /* Inserts the frame table entry FTE into the frame table with key KPAGE 
    corresponding to its physical address. */
-void
+static void
 insert_frame (struct fte * fte, void * kpage)
 {
     /* Probably want to make sure isn't evicted until info loaded from
