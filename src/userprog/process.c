@@ -21,6 +21,7 @@
 #include "threads/vaddr.h"
 #ifdef VM
 #include "vm/frame.h"
+#include "vm/mmap.h"
 #endif
 
 static thread_func start_process NO_RETURN;
@@ -158,14 +159,19 @@ process_exit (void)
   uint32_t *pd;
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
-  cur->exit_info->exit_status = cur->exit_status;
-  sema_up (&cur->exit_info->exited);
 
-  lock_acquire (&cur->exit_info->refs_lock);
-  int ref = --(cur->exit_info->refs_cnt);
-  lock_release (&cur->exit_info->refs_lock);
-  if (ref == 0)
-    palloc_free_page (cur->exit_info);
+  /* Making sure that initial_thread doesn't execute this. */
+  if (cur->exit_info) 
+    {
+      cur->exit_info->exit_status = cur->exit_status;
+      sema_up (&cur->exit_info->exited);
+
+      lock_acquire (&cur->exit_info->refs_lock);
+      int ref = --(cur->exit_info->refs_cnt);
+      lock_release (&cur->exit_info->refs_lock);
+      if (ref == 0)
+        palloc_free_page (cur->exit_info);
+    }
 
   /* Iterate through child processes' child exit info structs and
      decrement the reference count since parent is exiting. Free 
@@ -183,6 +189,9 @@ process_exit (void)
         palloc_free_page (cp);
     }
 
+#ifdef VM
+  mmap_destroy ();
+#endif
   /* Close all file descriptors. */
   for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
     {
