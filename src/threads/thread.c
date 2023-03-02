@@ -15,6 +15,9 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+#ifdef VM
+#include "vm/page.h"
+#endif
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -657,6 +660,9 @@ init_child (struct thread *t)
 
       list_push_back (&thread_current ()->children, &exit_info->child_elem);
       t->exit_info = exit_info;
+#ifdef VM
+      hash_init (&t->spt, spt_hash, spt_less, NULL);
+#endif
     }
   return true;
 }

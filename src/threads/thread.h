@@ -6,6 +6,9 @@
 #include <stdint.h>
 #include "threads/fixed-point.h"
 #include "threads/synch.h"
+#ifdef VM
+#include <hash.h>
+#endif
 
 
 /* States in a thread's life cycle. */
@@ -170,7 +173,9 @@ struct thread
    struct child_exit_info *exit_info;  /* Thread's exit information shared with
                                           parent. */
 #endif
-
+#ifdef VM
+   struct hash spt;                    /* Supplementary Page Table. */
+#endif
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
