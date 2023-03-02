@@ -48,6 +48,8 @@ spt_try_add_upage (void *upage, bool writable, bool is_file,
 
     spte->disk_info = *disk_info;
 
+    pagedir_add_spte (thread_current ()->pagedir, upage, spte);
+
     hash_insert (spt, &spte->hash_elem);
 
     return true;
@@ -55,7 +57,7 @@ spt_try_add_upage (void *upage, bool writable, bool is_file,
 
 /* Loading the current thread's virtual page UPAGE into the frame KPAGE */
 bool
-spt_load_upage (void *upage, void *kpage)
+spt_try_load_upage (void *upage)
 {
     ASSERT (pg_ofs (upage) == 0);
 
@@ -64,12 +66,14 @@ spt_load_upage (void *upage, void *kpage)
 
     spte = lookup_spte (&thread_current ()->spt, upage);
     if (spte == NULL)
-        goto fail;
+        return false;
 
     disk_info = spte->disk_info;
     /* Assuming it is a page now. */
     if (!spte->is_file)
         PANIC ("Not implemented non FILEs");
+    
+    void *kpage = frame_get_page (PAL_USER);
     
     if (!install_file (kpage, disk_info.file_info))
         goto fail;
@@ -94,7 +98,7 @@ spt_load_upage (void *upage, void *kpage)
 
 /* Returns a hash value for a spte P. */
 unsigned
-spt_hash (const struct hash_elem *p_, void *aux UNUSED)
+spt_hash (const struct hash_elem *p_, void *aux)
 {
   const struct spte *spte = hash_entry (p_, struct spte, hash_elem);
   return hash_int ((unsigned)spte->upage);
@@ -103,7 +107,7 @@ spt_hash (const struct hash_elem *p_, void *aux UNUSED)
 /* Returns true if a spte A_ precedes spte B_. */
 bool
 spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
-           void *aux UNUSED)
+           void *aux)
 {
   const struct spte *a = hash_entry (a_, struct spte, hash_elem);
   const struct spte *b = hash_entry (b_, struct spte, hash_elem);

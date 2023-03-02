@@ -51,8 +51,8 @@ struct spte
 
 bool spt_try_add_upage (void *upage, bool writable, bool is_file,
                         union disk_info *disk_info);
-bool spt_load_upage (void *upage, void *kpage);
-unsigned spt_hash (const struct hash_elem *p_, void *aux UNUSED);
+bool spt_try_load_upage (void *upage);
+unsigned spt_hash (const struct hash_elem *p_, void *aux);
 bool spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
-               void *aux UNUSED);
+               void *aux);
 #endif /* vm/page.h */

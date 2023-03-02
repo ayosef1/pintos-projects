@@ -127,6 +127,56 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
     return false;
 }
 
+/* Because SPTE is page alligend, as all addresses, the PRESENT
+   bit will never be set so we can do this and it will return. */
+bool
+pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte)
+{
+    uint32_t *pte;
+
+  ASSERT (pg_ofs (upage) == 0);
+  ASSERT (is_user_vaddr (upage));
+  ASSERT (pd != init_page_dir);
+
+  pte = lookup_page (pd, upage, true);
+
+  if (pte != NULL) 
+    {
+      ASSERT ((*pte & PTE_P) == 0);
+      *pte = (uint32_t) spte;
+      return true;
+    }
+  else
+    return false;
+}
+
+/* Looks up the physical address that corresponds to user virtual
+   address UADDR in PD.  Returns the kernel virtual address
+   corresponding to that physical address, or a null pointer if
+   UADDR is unmapped. */
+struct spte *
+pagedir_get_spte (uint32_t *pd, const void *uaddr) 
+{
+  uint32_t *pte;
+
+  ASSERT (is_user_vaddr (uaddr));
+  
+  pte = lookup_page (pd, uaddr, false);
+  if (pte != NULL )
+    {
+      if ((*pte & PTE_P) != 0)
+        {
+          // void *kpage = pte_get_page (*pte) + pg_ofs (uaddr);
+          /* Eventually add a lookup function here. */
+          return NULL;
+        }
+      else
+        return *pte == 0 ? NULL : (struct spte *) *pte;
+    }
+  else
+    return NULL;
+}
+
 /* Looks up the physical address that corresponds to user virtual
    address UADDR in PD.  Returns the kernel virtual address
    corresponding to that physical address, or a null pointer if

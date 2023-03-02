@@ -509,6 +509,16 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
+      union disk_info disk_info;
+      disk_info.file_info.file = file;
+      disk_info.file_info.page_read_bytes = page_read_bytes;
+      disk_info.file_info.ofs = ofs;
+
+      /* Lazy load */
+#ifdef VM
+      if (!spt_try_add_upage (upage, writable, true, &disk_info))
+        return false;
+#else
       uint8_t *kpage = frame_get_page (PAL_USER);
       if (kpage == NULL)
         return false;
@@ -527,11 +537,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           palloc_free_page (kpage);
           return false; 
         }
+#endif
 
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
+      ofs += PGSIZE;
     }
   return true;
 }

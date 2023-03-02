@@ -3,11 +3,18 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#ifdef VM
+#include "vm/page.h"
+#endif 
 
 uint32_t *pagedir_create (void);
 void pagedir_destroy (uint32_t *pd);
 bool pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool rw);
 void *pagedir_get_page (uint32_t *pd, const void *upage);
+#ifdef VM
+bool pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte);
+struct spte *pagedir_get_spte (uint32_t *pd, const void *uaddr);
+#endif
 void pagedir_clear_page (uint32_t *pd, void *upage);
 bool pagedir_is_dirty (uint32_t *pd, const void *upage);
 void pagedir_set_dirty (uint32_t *pd, const void *upage, bool dirty);
