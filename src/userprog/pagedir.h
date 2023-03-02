@@ -15,6 +15,7 @@ void *pagedir_get_page (uint32_t *pd, const void *upage);
 bool pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte);
 struct spte *pagedir_get_spte (uint32_t *pd, const void *uaddr);
 bool pagedir_is_present (uint32_t *pd, const void *upage);
+void pagedir_null_page (uint32_t *pd, void *upage);
 #endif
 void pagedir_clear_page (uint32_t *pd, void *upage);
 bool pagedir_is_dirty (uint32_t *pd, const void *upage);

@@ -8,6 +8,7 @@
 #include "userprog/pagedir.h"
 #include "vm/page.h"
 #include "vm/frame.h"
+#include "vm/swap.h"
 
 static bool install_file (void *kpage, struct filesys_info filesys_info);
 
@@ -150,11 +151,11 @@ spt_try_load_upage (void *upage)
             if (!install_file (kpage, disk_info.filesys_info))
                 goto fail;
         }
-    // else
-    //     {
-    //         if (!swap_try_read (disk_info.swap_id, upage))
-    //             goto fail;
-    //     }
+    else
+        {
+            if (!swap_try_read (disk_info.swap_id, upage))
+                goto fail;
+        }
 
     // TODO: is it right to do this after installing?
     if (!pagedir_set_page (pd, upage, kpage, writable)) 
@@ -204,7 +205,7 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
                     frame_free_page (pagedir_get_page (pd, cur_upage));
                 }
             /* Should this not get rid of it. Unless it is in memory still. */
-            pagedir_clear_page (pd, cur_upage);
+            pagedir_null_page (pd, cur_upage);
             free (spte);
         }
 }

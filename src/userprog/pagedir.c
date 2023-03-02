@@ -223,6 +223,22 @@ pagedir_clear_page (uint32_t *pd, void *upage)
     }
 }
 
+void
+pagedir_null_page (uint32_t *pd, void *upage)
+{
+  uint32_t *pte;
+  
+  ASSERT (pg_ofs (upage) == 0);
+  ASSERT (is_user_vaddr (upage));
+
+  pte = lookup_page (pd, upage, false);
+  if (pte != NULL)
+    {
+      *pte = 0;
+      invalidate_pagedir (pd);
+    }
+}
+
 /* Returns true if the PTE for virtual page VPAGE in PD is dirty,
    that is, if the page has been modified since the PTE was
    installed.
