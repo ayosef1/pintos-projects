@@ -15,7 +15,7 @@ static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
-static bool valid_stack_growth (void* esp, void* fault_addr);
+static bool valid_stack_growth (void* esp, void *fault_addr);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -165,7 +165,7 @@ page_fault (struct intr_frame *f)
             if (spt_try_load_upage (fault_upage))
                return;
 
-            if (valid_stack_growth(f->esp, fault_addr) && 
+            if (valid_stack_growth(f->esp, fault_addr, fault_upage) && 
                 spt_try_add_stack_page (fault_upage))
                {
                      return;
@@ -187,7 +187,7 @@ page_fault (struct intr_frame *f)
 
 /* Check if access is within 32 bytes of stack pointer*/
  static bool
- valid_stack_growth (void* esp, void* fault_addr)
+ valid_stack_growth (void* esp, void *fault_addr)
  {
      if (fault_addr < (esp - 32) || fault_addr == NULL || 
          pg_round_down (fault_addr) < PHYS_BASE - MAX_STACK_SIZE) {

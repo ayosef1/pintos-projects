@@ -165,9 +165,8 @@ pagedir_get_spte (uint32_t *pd, const void *uaddr)
     {
       if ((*pte & PTE_P) != 0)
         {
-          // void * kpage = pte_get_page (*pte) + pg_ofs (uaddr);
-          // return frame_get_spte (kpage);
-          return pte_get_page (*pte) + pg_ofs (uaddr);
+          void * kpage = pte_get_page (*pte) + pg_ofs (uaddr);
+          return frame_get_spte (kpage);
         }
       else
         return *pte == 0 ? NULL : (struct spte *) *pte;

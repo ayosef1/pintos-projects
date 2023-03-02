@@ -438,7 +438,7 @@ sys_mmap (uint32_t *esp)
       /* Check not already mapped. */
       /* TODO: Change this to pagedir_get_spt when implemented
          correctly. */
-      if (spt_find (&thread_current ()->spt, addr) != NULL)
+      if (pagedir_get_spte (cur->pagedir, addr) != NULL)
         goto done;
     }
 

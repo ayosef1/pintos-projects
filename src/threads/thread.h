@@ -174,7 +174,6 @@ struct thread
                                           parent. */
 #endif
 #ifdef VM
-   struct hash spt;                    /* Supplementary Page Table. */
    struct hash mmap_table;             /* Memory map table. */
 #endif
     /* Owned by thread.c. */

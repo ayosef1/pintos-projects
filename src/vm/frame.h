@@ -5,6 +5,7 @@
 #include "threads/synch.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
+#include "vm/page.h"
 
 /* A frame table entry of the frame table.
     
@@ -35,6 +36,7 @@ void frame_table_init (uint8_t *user_pool_base, size_t user_pages);
 void frame_table_create (void);
 void frame_table_destroy (void);
 void *frame_get_page (enum palloc_flags flags);
+struct spte *frame_get_spte (void *kpage);
 void frame_free_page (void *kpage);
 void frame_set_udata (void *kpage, void *upage, uint32_t *pd,
                       struct spte *spte);

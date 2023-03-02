@@ -662,7 +662,6 @@ init_child (struct thread *t)
       list_push_back (&thread_current ()->children, &exit_info->child_elem);
       t->exit_info = exit_info;
 #ifdef VM
-      hash_init (&t->spt, spt_hash, spt_less, NULL);
       hash_init (&t->mmap_table, mmap_hash, mmap_less, NULL);
 #endif
     }

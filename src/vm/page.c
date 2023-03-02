@@ -23,34 +23,21 @@ static bool install_file (void *kpage, struct filesys_info filesys_info);
    
    Returns true if page was successfully added to the supplementary
    page table, false otherwise. */
-bool
+struct spte *
 spt_try_add_upage (void *upage, enum page_type type, bool in_memory, 
                    bool filesys_page, union disk_info *disk_info)
 {
     ASSERT (pg_ofs (upage) == 0);
 
     struct spte * spte;
-    uint32_t * pd = thread_current ()->pagedir;
 
+    uint32_t * pd = thread_current ()->pagedir;
     if (pagedir_get_spte (pd, upage))
-    {
-        PANIC ("Here is our issue.");
-        return false;
-    }
-    /* When properly implemented we just remove this */
-    spte = spt_find (&thread_current ()->spt, upage);
+        return NULL;
+
+    spte = malloc (sizeof (struct spte));
     if (spte == NULL)
-        {
-            spte = malloc (sizeof (struct spte));
-            if (spte == NULL)
-                return false;
-        }
-    else
-    /* This should never hit! */
-    {
-        PANIC ("Found an SPTE entry in spt table.");
-        return false;
-    }
+        return NULL;
     
     spte->upage = upage;
     spte->type = type;
@@ -58,14 +45,10 @@ spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
     spte->filesys_page = filesys_page;
     spte->disk_info = *disk_info;
 
-    /* This will become useful when we use pagedir to as spte store.
-       For now doing nothing. */
-    pagedir_add_spte (pd, upage, spte);
+    if (!in_memory)
+        pagedir_add_spte (pd, upage, spte);
 
-    /* This should be redundant shortly. */
-    hash_insert (&thread_current ()->spt, &spte->hash_elem);
-
-    return true;
+    return spte;
 }
 
 /* Attempt to add a stack page with user virtual page UPAGE to the 
@@ -76,6 +59,7 @@ spt_try_add_stack_page (void *upage)
 {
   union disk_info empty_disk_info;
   uint32_t *pd;
+  struct spte *spte;
 
   void *kpage = frame_get_page (PAL_USER | PAL_USER);
   if (kpage == NULL)
@@ -83,11 +67,15 @@ spt_try_add_stack_page (void *upage)
   
   /* Checks each spte not there and upage. */
   pd = thread_current ()->pagedir;
-  if (pagedir_get_spte (pd, upage) == NULL && 
-      spt_try_add_upage (upage, TMP, true, false, &empty_disk_info))
-    {
-        if (pagedir_set_page (pd, upage, kpage, true))
+  if (pagedir_get_spte (pd, upage) == NULL)
+    {   
+        spte = spt_try_add_upage (upage, TMP, true, false, &empty_disk_info);
+        if (spte != NULL)
+            {
+                pagedir_set_page (pd, upage, kpage, true);
+                frame_set_udata (kpage, upage, pd, spte);
                 return true;
+            }
     }
   return false;
 }
@@ -107,6 +95,7 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
   disk_info.filesys_info.file = fp;
   disk_info.filesys_info.page_read_bytes = PGSIZE;
   disk_info.filesys_info.ofs = 0;
+  disk_info.filesys_info.writable = true;
 
   for (pg = 0; pg < pg_cnt - 1; pg += 1)
     {
@@ -144,10 +133,9 @@ spt_try_load_upage (void *upage)
     pd = thread_current ()->pagedir;
     pagedir_clear_page (pd, upage);
 
-    spte = spt_find (&thread_current ()->spt, upage);
+    spte = pagedir_get_spte (pd, upage);
     if (spte == NULL)
         return false;
-
 
     bool writable = true;
     if (spte->type == EXEC)
@@ -195,7 +183,7 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
     for (int pg = 0; pg < num_pages; pg ++)
         {
             void *cur_upage = begin_upage + (pg * PGSIZE);
-            spte = spt_find (&thread_current ()->spt, cur_upage);
+            spte = pagedir_get_spte (pd, cur_upage);
             if (spte == NULL)
                 continue;
             /* Go through the frame table to do this -> similar to pagedir
@@ -215,46 +203,11 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
                         }
                     frame_free_page (pagedir_get_page (pd, cur_upage));
                 }
+            /* Should this not get rid of it. Unless it is in memory still. */
             pagedir_clear_page (pd, cur_upage);
-            /* Need to get the physical address. */
-            hash_delete (&thread_current ()->spt, &spte->hash_elem);
             free (spte);
         }
 }
-
-
-/* Returns a hash value for a spte P. */
-unsigned
-spt_hash (const struct hash_elem *p_, void *aux)
-{
-  const struct spte *spte = hash_entry (p_, struct spte, hash_elem);
-  return hash_int ((unsigned)spte->upage);
-}
-
-/* Returns true if a spte A_ precedes spte B_. */
-bool
-spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
-           void *aux)
-{
-  const struct spte *a = hash_entry (a_, struct spte, hash_elem);
-  const struct spte *b = hash_entry (b_, struct spte, hash_elem);
-  
-  return a->upage < b->upage;
-}
-
-/* Looks up UPAGE page in a supplemental page table HASH.
-   Returns NULL if no such entry, otherwise returns spte pointer. */
-struct spte *
-spt_find (struct hash *spt, void *upage)
-{
-  struct spte spte;
-  struct hash_elem *e;
-
-  spte.upage = upage;
-  e = hash_find (spt, &spte.hash_elem);
-  return e != NULL ? hash_entry (e, struct spte, hash_elem) : NULL;
-}
-
 static bool
 install_file (void *kpage, struct filesys_info filesys_info)
 {
