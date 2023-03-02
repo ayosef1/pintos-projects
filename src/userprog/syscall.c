@@ -480,8 +480,7 @@ is_valid_memory (void *start, unsigned size)
 static bool 
 is_valid_address (void *vaddr)
 {
-  return vaddr != NULL && is_user_vaddr (vaddr)
-                       && pagedir_get_spte (thread_current ()->pagedir, vaddr);
+  return vaddr != NULL && is_user_vaddr (vaddr);
 }
 
 /* Returns whether FD is between 0 and MAX_FILES */
