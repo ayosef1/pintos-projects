@@ -25,7 +25,7 @@ swap_try_read (size_t start_id, void *upage)
     lock_acquire (&swap_lock);
     for (size_t id = start_id; id < SECTORS_PER_SLOT; id++)
         {
-            if (!bitmap_test (used_map, start_id))
+            if (!bitmap_test (used_map, id))
                 {
                     ret = false;
                     break;
@@ -42,7 +42,7 @@ swap_write (void *upage)
 {
     lock_acquire (&swap_lock);
 
-    size_t start_id = bitmap_scan_and_flip (used_map, 0, 8, true);
+    size_t start_id = bitmap_scan_and_flip (used_map, 0, 8, false);
     if (start_id == BITMAP_ERROR)
         PANIC ("Swap is full");
     

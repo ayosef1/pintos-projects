@@ -51,7 +51,6 @@ frame_get_page (enum palloc_flags flags)
         /* Use clock to find correct page to evict */
         lock_acquire(&frame_lock);
         kpage = frame_evict ();
-        lock_release (&frame_lock);
         if (kpage == NULL)
             PANIC ("Eviction Didn't Find Page");
         /* Unload using an spte function
@@ -59,6 +58,7 @@ frame_get_page (enum palloc_flags flags)
             ii) Set pagedir to have PTE_P as 0 */
         //PANIC("Yet to implement the unloading");
         delete_frame (kpage);
+        lock_release (&frame_lock);
     }
     fte = malloc (sizeof (struct fte));
     insert_frame (fte, kpage);
@@ -182,7 +182,7 @@ void *frame_evict (void)
             } else {
                 /* Evict the frame and return the kernel virtual address of the
                  evicted page. */
-                spt_evict_upage (entry->upage, entry->pd);
+                spt_evict_upage (entry->upage, entry->pd, entry->spte);
                 move_clock_hand();
                 return entry->kpage;
             }

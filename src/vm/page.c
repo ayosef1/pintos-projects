@@ -204,10 +204,9 @@ spt_load_upage (void *upage, void *kpage)
    eviction once an evicted page has been selected by our eviction
    algorithm. After this function we would write over the upage. */
 void 
-spt_evict_upage (void *upage, uint32_t *pd)
+spt_evict_upage (void *upage, uint32_t *pd, struct spte *spte)
 {
 
-    struct spte *spte = spt_find (upage);
     if (spte == NULL)
         return;
     
@@ -234,6 +233,7 @@ spt_evict_upage (void *upage, uint32_t *pd)
         default:
             spte->filesys_page = false; 
             spte->disk_info.swap_id = swap_write (upage);
+            pagedir_clear_page(pd, upage);
             break;
     }
     spte->in_memory = false;
