@@ -7,6 +7,7 @@
 #include "threads/palloc.h"
 #ifdef VM
 #include "vm/frame.h"
+#include <stdio.h>
 #endif
 
 static uint32_t *active_pd (void);
@@ -143,6 +144,7 @@ pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte)
   if (pte != NULL) 
     {
       ASSERT ((*pte & PTE_P) == 0);
+      // printf ("Store spte with address %p in entry for uaddr %p\n", spte, upage);
       *pte = (uint32_t) spte;
       return true;
     }
@@ -163,6 +165,8 @@ pagedir_get_spte (uint32_t *pd, const void *uaddr)
     {
       if ((*pte & PTE_P) != 0)
         {
+          // void * kpage = pte_get_page (*pte) + pg_ofs (uaddr);
+          // return frame_get_spte (kpage);
           return pte_get_page (*pte) + pg_ofs (uaddr);
         }
       else
@@ -188,6 +192,16 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
     return pte_get_page (*pte) + pg_ofs (uaddr);
   else
     return NULL;
+}
+
+/* Returns true if the PTE for virtual page VPAGE in PD is present,
+   that is, if the page is currently in memory.
+   Returns false if PD contains no PTE for VPAGE. */
+bool
+pagedir_is_present (uint32_t *pd, const void *vpage) 
+{
+  uint32_t *pte = lookup_page (pd, vpage, false);
+  return pte != NULL && (*pte & PTE_P) != 0;
 }
 
 /* Marks user virtual page UPAGE "not present" in page

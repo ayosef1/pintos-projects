@@ -554,21 +554,14 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp, char *exec_name, char *save_ptr) 
 {
-  uint8_t *kpage;
   bool success = false;
 
-  kpage = frame_get_page (PAL_USER | PAL_ZERO);
-  if (kpage == NULL)
-    return false;
-
-  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  uint8_t *stack_upage = ((uint8_t *) PHYS_BASE) - PGSIZE;
+  success = spt_try_add_stack_page (stack_upage);
   if (success)
     *esp = PHYS_BASE;
   else
-    {
-      palloc_free_page (kpage);
-      return false;
-    }
+    return false;
 
   void * start_height = *esp;
 

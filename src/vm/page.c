@@ -115,8 +115,6 @@ spt_try_load_upage (void *upage)
         writable = spte->disk_info.filesys_info.writable;
     
     void *kpage = frame_get_page (PAL_USER);
-    if (!pagedir_set_page (pd, upage, kpage, writable)) 
-        goto fail;
     
     disk_info = spte->disk_info;
     /* Assuming it is a page now. */
@@ -130,6 +128,10 @@ spt_try_load_upage (void *upage)
     //         if (!swap_try_read (disk_info.swap_id, upage))
     //             goto fail;
     //     }
+
+    // TODO: is it right to do this after installing?
+    if (!pagedir_set_page (pd, upage, kpage, writable)) 
+        goto fail;
 
     pagedir_set_accessed (pd, upage, true);
     pagedir_set_dirty (pd, upage, false);
