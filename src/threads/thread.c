@@ -627,6 +627,7 @@ init_thread (struct thread *t, const char *name, int priority)
     t->next_fd = EXEC_FD + 1;
   
     list_init (&t->children);
+    t->saved_user_esp = NULL;
   #endif
 
   /* Initialize the list of locks held by current list*/

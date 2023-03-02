@@ -57,6 +57,8 @@ syscall_handler (struct intr_frame *f)
 
   if (!is_valid_address (f->esp))
     exit (SYSCALL_ERROR);
+  
+  thread_current ()->saved_user_esp = f->esp;
 
   syscall_num = get_arg_int(f->esp, 0);
   switch (syscall_num)
@@ -438,7 +440,8 @@ sys_mmap (uint32_t *esp)
       /* Check not already mapped. */
       /* TODO: Change this to pagedir_get_spt when implemented
          correctly. */
-      if (pagedir_get_spte (cur->pagedir, addr) != NULL)
+      if (pagedir_get_spte (cur->pagedir, addr, false) != NULL)
+        /* Should you release the lock? */
         goto done;
     }
 

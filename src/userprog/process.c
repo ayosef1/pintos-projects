@@ -529,7 +529,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       if (!spt_try_add_upage (upage, EXEC, false, true, &disk_info))
         return false;
 #else
-      uint8_t *kpage = frame_get_page (PAL_USER);
+      uint8_t *kpage = frame_get_page (false);
       if (kpage == NULL)
         return false;
 

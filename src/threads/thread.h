@@ -172,6 +172,8 @@ struct thread
    struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
    struct child_exit_info *exit_info;  /* Thread's exit information shared with
                                           parent. */
+   void *saved_user_esp;               /* Saved ESP for when we switch to kernel
+                                          mode. */
 #endif
 #ifdef VM
    struct hash mmap_table;             /* Memory map table. */

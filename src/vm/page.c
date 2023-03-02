@@ -33,7 +33,7 @@ spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
     struct spte * spte;
 
     uint32_t * pd = thread_current ()->pagedir;
-    if (pagedir_get_spte (pd, upage))
+    if (pagedir_get_spte (pd, upage, false))
         return NULL;
 
     spte = malloc (sizeof (struct spte));
@@ -42,7 +42,6 @@ spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
     
     spte->upage = upage;
     spte->type = type;
-    spte->in_memory = in_memory;
     spte->filesys_page = filesys_page;
     spte->disk_info = *disk_info;
 
@@ -59,26 +58,23 @@ bool
 spt_try_add_stack_page (void *upage)
 {
   union disk_info empty_disk_info;
-  uint32_t *pd;
   struct spte *spte;
+  uint32_t *pd;
 
-  void *kpage = frame_get_page (PAL_USER | PAL_USER);
+  void *kpage = frame_get_page (ZEROED);
   if (kpage == NULL)
     return false;
   
   /* Checks each spte not there and upage. */
-  pd = thread_current ()->pagedir;
-  if (pagedir_get_spte (pd, upage) == NULL)
-    {   
-        spte = spt_try_add_upage (upage, TMP, true, false, &empty_disk_info);
-        if (spte != NULL)
-            {
-                pagedir_set_page (pd, upage, kpage, true);
-                frame_set_udata (kpage, upage, pd, spte);
-                return true;
-            }
+  spte = spt_try_add_upage (upage, TMP, true, false, &empty_disk_info);
+  if (spte != NULL)
+    {
+        pd = thread_current ()->pagedir;
+        pagedir_set_page (pd, upage, kpage, true);
+        frame_set_udata (kpage, upage, pd, spte, false);
+        return true;
     }
-  return false;
+return false;
 }
 
 /* Attempts to add PG_CNT consecutive user virtual pages starting from 
@@ -123,7 +119,7 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
 
 /* Loading the current thread's virtual page UPAGE into the frame KPAGE */
 bool
-spt_try_load_upage (void *upage)
+spt_try_load_upage (void *upage, bool keep_pinned)
 {
     ASSERT (pg_ofs (upage) == 0);
 
@@ -132,17 +128,17 @@ spt_try_load_upage (void *upage)
     union disk_info disk_info;
 
     pd = thread_current ()->pagedir;
-    pagedir_clear_page (pd, upage);
+    
+    void *kpage = frame_get_page (NOT_ZEROED);
 
-    spte = pagedir_get_spte (pd, upage);
+    /* Not sure whether to do this before or after? */
+    spte = pagedir_get_spte (pd, upage, true);
     if (spte == NULL)
         return false;
 
     bool writable = true;
     if (spte->type == EXEC)
         writable = spte->disk_info.filesys_info.writable;
-    
-    void *kpage = frame_get_page (PAL_USER);
     
     disk_info = spte->disk_info;
     /* Assuming it is a page now. */
@@ -164,8 +160,7 @@ spt_try_load_upage (void *upage)
     pagedir_set_accessed (pd, upage, true);
     pagedir_set_dirty (pd, upage, false);
 
-    frame_set_udata (kpage, upage, pd, spte);
-    spte->in_memory = true;
+    frame_set_udata (kpage, upage, pd, spte, keep_pinned);
     return true;
 
     fail:
@@ -173,9 +168,45 @@ spt_try_load_upage (void *upage)
         return false;
 }
 
+void
+spt_evict_upage (uint32_t *pd, void *upage, struct spte *spte)
+{
+     /*
+     Determine what to do based on the spte.
+     EXEC && WRITABLE && IS_DIRTY
+     */
+    switch (spte->type)
+        {
+        case (MMAP):
+            /* Only need to write if MMAP is written. */
+            if (pagedir_is_dirty(pd, upage))
+                {
+                    /* Write back to memory. */
+                    lock_acquire (&filesys_lock);
+                    file_write_at (spte->disk_info.filesys_info.file, upage,
+                                   PGSIZE, spte->disk_info.filesys_info.ofs);
+                    lock_release (&filesys_lock);
+                }
+            break;
+        case (EXEC):
+            /* If an executable page has never been written to, do nothing.
+               Otherwise write to swap. */
+            if (spte->filesys_page && (!spte->disk_info.filesys_info.writable ||
+                !pagedir_is_dirty(pd, upage)))
+                break;
+        default:
+            spte->filesys_page = false; 
+            spte->disk_info.swap_id = swap_write (upage);
+            break;
+        }
+        /* Need this to be atomic somehow. No other thread
+        will acces but how make atomic with. The owner of the table?*/
+    pagedir_add_spte (pd, upage, spte);
+}
+
 /* Removes PG_CNT consecutive mmaped user virtual pages from the current 
    thread's supplementary page table starting from BEGIN_UPAGE. This is used
-   on process exit or failed mmap calls. */
+   on process exit, failed mmap calls and munmap. */
 void
 spt_remove_mmap_pages (void * begin_upage, int num_pages)
 {
@@ -184,7 +215,7 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
     for (int pg = 0; pg < num_pages; pg ++)
         {
             void *cur_upage = begin_upage + (pg * PGSIZE);
-            spte = pagedir_get_spte (pd, cur_upage);
+            spte = pagedir_get_spte (pd, cur_upage, true);
             if (spte == NULL)
                 continue;
             /* Go through the frame table to do this -> similar to pagedir
