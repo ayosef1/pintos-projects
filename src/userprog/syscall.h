@@ -1,6 +1,12 @@
 #ifndef USERPROG_SYSCALL_H
 #define USERPROG_SYSCALL_H
 
+#ifdef VM
+#include "vm/mmap.h"
+#endif
+
+#define SYSCALL_ERROR -1
+
 typedef int pid_t;
 /* Coarse grain lock for filesystem access */
 struct lock filesys_lock;
