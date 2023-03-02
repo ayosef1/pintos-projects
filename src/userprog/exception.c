@@ -156,7 +156,8 @@ page_fault (struct intr_frame *f)
    user = (f->error_code & PF_U) != 0;
 
    fault_page = pg_round_down (fault_addr);
-
+   // printf("fault adress %d\n", fault_addr);
+   // printf("esp is %d\n", f->esp);
    // Check if page exists in the supplemental page table?
    if (is_user_vaddr (fault_addr))
    {
@@ -166,17 +167,20 @@ page_fault (struct intr_frame *f)
       void *kpage = frame_get_page (PAL_USER | PAL_ZERO);
       if (kpage == NULL)
          PANIC ("Unable to acquire page");
-
       if (valid_stack_growth(f->esp, fault_addr))
          {
+            // printf("was a valid stack growth and about to grow %p\n", f->esp);
             if (spt_try_add_stack_page (fault_page, kpage))
-               success = true;
+               {
+                  success = true;
+                  // printf("stack just grew %p\n", f->esp);
+               }   
          }
       else if (spt_load_upage (fault_page, kpage))
-         {
+         {  
             success = true;
          }
-
+      // printf("loaded upage %d\n", success);
       if (success)
          return;
       

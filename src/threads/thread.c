@@ -628,6 +628,10 @@ init_thread (struct thread *t, const char *name, int priority)
     list_init (&t->children);
   #endif
 
+  #ifdef VM
+    t->in_syscall = false;
+  #endif
+
   /* Initialize the list of locks held by current list*/
   list_init (&t->locks_held);
 

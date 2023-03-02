@@ -44,13 +44,16 @@ frame_get_page (enum palloc_flags flags)
 {
     void *kpage;
     struct fte *fte;
-
+    
     kpage = palloc_get_page (flags);
+    /* Remove Later*/
+    bool eviction = false;
     if (kpage == NULL)
     {
         /* Use clock to find correct page to evict */
         lock_acquire(&frame_lock);
         kpage = frame_evict ();
+        lock_release (&frame_lock);
         if (kpage == NULL)
             PANIC ("Eviction Didn't Find Page");
         /* Unload using an spte function
@@ -58,8 +61,9 @@ frame_get_page (enum palloc_flags flags)
             ii) Set pagedir to have PTE_P as 0 */
         //PANIC("Yet to implement the unloading");
         delete_frame (kpage);
-        lock_release (&frame_lock);
+        eviction = true;
     }
+    // printf("Palloced %d and was it from eviction? %d \n", kpage, eviction);
     fte = malloc (sizeof (struct fte));
     insert_frame (fte, kpage);
 
@@ -88,8 +92,7 @@ frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte)
     fte->upage = upage;
     fte->pd = pd;
     fte->spte = spte;
-    fte->pinned = false;
-    /* TODO: Maybe also unpin here when do eviction */
+    fte->pinned = thread_current ()->in_syscall;
 }
 
 /* Inserts the frame table entry FTE into the frame table with key KPAGE 
@@ -165,6 +168,7 @@ void *frame_evict (void)
     while (true) {
         if (list_empty(&frame_table))
             continue;
+        
         struct fte *entry = list_entry(hand, struct fte, elem);
         /* If the hand is pinned, skip it. We must account for frame table 
         entries that aren't completely set up */

@@ -57,6 +57,8 @@ syscall_handler (struct intr_frame *f)
 {
   uint32_t syscall_num;
 
+  thread_current ()->in_syscall = true;
+
   if (!is_valid_address (f->esp))
     exit (SYSCALL_ERROR);
 
@@ -111,6 +113,7 @@ syscall_handler (struct intr_frame *f)
     default:
       exit (SYSCALL_ERROR);
   }
+  thread_current ()->in_syscall = false;
 }
 
 /* Interface to the exit syscall to allow the page fault exception handler
@@ -321,6 +324,7 @@ sys_write (uint32_t *esp)
           int to_write = remaining > BUF_MAX ? BUF_MAX : remaining;
           putbuf (buffer, to_write);
           remaining -= to_write;
+          buffer += to_write;
         }
       bytes_written = size;
     }
