@@ -92,6 +92,45 @@ spt_try_add_stack_page (void *upage)
   return false;
 }
 
+/* Attempts to add PG_CNT consecutive user virtual pages starting from 
+   BEGIN_UPAGE to the supplementary page table. To lazily read, the
+   spt needs to store the file pointer FP for each. Each page contains all
+   read bytes except the final page which has FINAL_READ_BYTES read bytes.
+   
+   Returns true on success of adding mappings for all pages. */
+bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
+                            size_t final_read_bytes)
+{
+  union disk_info disk_info;
+  int pg;
+
+  disk_info.filesys_info.file = fp;
+  disk_info.filesys_info.page_read_bytes = PGSIZE;
+  disk_info.filesys_info.ofs = 0;
+
+  for (pg = 0; pg < pg_cnt - 1; pg += 1)
+    {
+        if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
+                                &disk_info))
+            {
+                spt_remove_mmap_pages (begin_upage, pg);
+                return false;
+            }
+        disk_info.filesys_info.ofs += PGSIZE;
+    }
+  
+  /* Final case. */
+  disk_info.filesys_info.page_read_bytes = final_read_bytes % PGSIZE;
+  if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
+                          &disk_info))
+    {
+        spt_remove_mmap_pages (begin_upage, pg);
+        return false;
+    }
+  return true;
+}
+
+
 /* Loading the current thread's virtual page UPAGE into the frame KPAGE */
 bool
 spt_try_load_upage (void *upage)
@@ -144,6 +183,45 @@ spt_try_load_upage (void *upage)
         frame_free_page (kpage);
         return false;
 }
+
+/* Removes PG_CNT consecutive mmaped user virtual pages from the current 
+   thread's supplementary page table starting from BEGIN_UPAGE. This is used
+   on process exit or failed mmap calls. */
+void
+spt_remove_mmap_pages (void * begin_upage, int num_pages)
+{
+    uint32_t *pd = thread_current ()->pagedir;
+    struct spte * spte;
+    for (int pg = 0; pg < num_pages; pg ++)
+        {
+            void *cur_upage = begin_upage + (pg * PGSIZE);
+            spte = spt_find (&thread_current ()->spt, cur_upage);
+            if (spte == NULL)
+                continue;
+            /* Go through the frame table to do this -> similar to pagedir
+               get_page. */
+            if (pagedir_is_present (pd, cur_upage))
+                {
+                    if (pagedir_is_dirty (pd, cur_upage))
+                        {
+                            /* Here would get the kpage from get_page in
+                               order to synchronize with other evicting
+                               threads. */
+                            lock_acquire (&filesys_lock);
+                            file_write_at (spte->disk_info.filesys_info.file,
+                                           cur_upage, PGSIZE,
+                                           spte->disk_info.filesys_info.ofs);
+                            lock_release (&filesys_lock);
+                        }
+                    frame_free_page (pagedir_get_page (pd, cur_upage));
+                }
+            pagedir_clear_page (pd, cur_upage);
+            /* Need to get the physical address. */
+            hash_delete (&thread_current ()->spt, &spte->hash_elem);
+            free (spte);
+        }
+}
+
 
 /* Returns a hash value for a spte P. */
 unsigned

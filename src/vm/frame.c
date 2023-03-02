@@ -82,6 +82,19 @@ frame_get_page (enum palloc_flags flags)
     return kpage;
 }
 
+// struct spte *
+// frame_get_spte (void * kpage)
+// {
+//     struct spte * spte;
+//     struct fte *fte = frame_lookup (kpage);
+//     if (kpage == NULL)
+//         return NULL;
+//     lock_acquire (&fte->lock);
+//     spte = fte->spte;
+//     lock_release (&fte->lock);
+//     return spte;
+// }
+
 /* Frees the physical frame associated with kernel virtual page KPAGE
    and all associated memory. */
 void
