@@ -150,10 +150,7 @@ pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte)
     return false;
 }
 
-/* Looks up the physical address that corresponds to user virtual
-   address UADDR in PD.  Returns the kernel virtual address
-   corresponding to that physical address, or a null pointer if
-   UADDR is unmapped. */
+/* TODO: this will no longer be valid when we implement proper sharing! */
 struct spte *
 pagedir_get_spte (uint32_t *pd, const void *uaddr) 
 {
@@ -166,9 +163,7 @@ pagedir_get_spte (uint32_t *pd, const void *uaddr)
     {
       if ((*pte & PTE_P) != 0)
         {
-          // void *kpage = pte_get_page (*pte) + pg_ofs (uaddr);
-          /* Eventually add a lookup function here. */
-          return NULL;
+          return pte_get_page (*pte) + pg_ofs (uaddr);
         }
       else
         return *pte == 0 ? NULL : (struct spte *) *pte;
