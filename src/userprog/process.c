@@ -510,13 +510,14 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
       /* Get a page of memory. */
       union disk_info disk_info;
-      disk_info.file_info.file = file;
-      disk_info.file_info.page_read_bytes = page_read_bytes;
-      disk_info.file_info.ofs = ofs;
+      disk_info.filesys_info.file = file;
+      disk_info.filesys_info.page_read_bytes = page_read_bytes;
+      disk_info.filesys_info.ofs = ofs;
+      disk_info.filesys_info.writable = writable;
 
       /* Lazy load */
 #ifdef VM
-      if (!spt_try_add_upage (upage, writable, true, &disk_info))
+      if (!spt_try_add_upage (upage, EXEC, false, true, &disk_info))
         return false;
 #else
       uint8_t *kpage = frame_get_page (PAL_USER);

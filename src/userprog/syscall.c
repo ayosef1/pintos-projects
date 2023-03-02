@@ -31,8 +31,6 @@ static void sys_seek (uint32_t *esp);
 static unsigned sys_tell (uint32_t *esp);
 static void sys_close (uint32_t *esp);
 
-static void exit (int status);
-
 static char *get_arg_string (void *esp, int pos, int limit);
 static void *get_arg_buffer (void *esp, int pos, int size);
 static int get_arg_int (void *esp, int pos);
@@ -415,7 +413,7 @@ get_arg_buffer (void *esp, int pos, int size)
 
   arg = (void **)esp + pos;
   
-  if (!is_valid_memory (arg, sizeof(char *)) || !is_valid_memory (*arg, size))
+  if (/*!is_valid_memory (arg, sizeof(char *)) ||*/ !is_valid_memory (*arg, size))
     exit (-1);
 
   return *(void **)arg;
@@ -483,7 +481,7 @@ static bool
 is_valid_address (void *vaddr)
 {
   return vaddr != NULL && is_user_vaddr (vaddr)
-                       && pagedir_get_page (thread_current ()->pagedir, vaddr);
+                       && pagedir_get_spte (thread_current ()->pagedir, vaddr);
 }
 
 /* Returns whether FD is between 0 and MAX_FILES */
