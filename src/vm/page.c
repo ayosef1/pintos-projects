@@ -71,6 +71,7 @@ spt_try_add_stack_page (void *upage)
     {
         pd = thread_current ()->pagedir;
         pagedir_set_page (pd, upage, kpage, true);
+        memset (upage, 0, PGSIZE);
         frame_set_udata (kpage, upage, pd, spte, false);
         return true;
     }
@@ -128,13 +129,18 @@ spt_try_load_upage (void *upage, bool keep_pinned)
     union disk_info disk_info;
 
     pd = thread_current ()->pagedir;
+
+    /* The page should not be in memory if we are making this call. */
+    ASSERT (!pagedir_is_present (pd, upage));
+
+    bool hold_frame_lock = false;
+
+    spte = pagedir_get_spte (pd, upage, false);
+    if (spte == NULL)
+        /* We acquire a lock here if in memory. Should we check this? */
+        return false;
     
     void *kpage = frame_get_page (NOT_ZEROED);
-
-    /* Not sure whether to do this before or after? */
-    spte = pagedir_get_spte (pd, upage, true);
-    if (spte == NULL)
-        return false;
 
     bool writable = true;
     if (spte->type == EXEC)
@@ -164,7 +170,7 @@ spt_try_load_upage (void *upage, bool keep_pinned)
     return true;
 
     fail:
-        frame_free_page (kpage);
+        frame_free_page (kpage, hold_frame_lock);
         return false;
 }
 
@@ -210,12 +216,13 @@ spt_evict_upage (uint32_t *pd, void *upage, struct spte *spte)
 void
 spt_remove_mmap_pages (void * begin_upage, int num_pages)
 {
-    uint32_t *pd = thread_current ()->pagedir;
     struct spte * spte;
+    uint32_t *pd = thread_current ()->pagedir;
+    bool hold_frame_lock = true;
     for (int pg = 0; pg < num_pages; pg ++)
         {
             void *cur_upage = begin_upage + (pg * PGSIZE);
-            spte = pagedir_get_spte (pd, cur_upage, true);
+            spte = pagedir_get_spte (pd, cur_upage, hold_frame_lock);
             if (spte == NULL)
                 continue;
             /* Go through the frame table to do this -> similar to pagedir
@@ -233,11 +240,11 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
                                            spte->disk_info.filesys_info.ofs);
                             lock_release (&filesys_lock);
                         }
-                    frame_free_page (pagedir_get_page (pd, cur_upage));
+                    frame_free_page (pagedir_get_page (pd, cur_upage),
+                                     hold_frame_lock);
                 }
             /* Should this not get rid of it. Unless it is in memory still. */
-            pagedir_null_page (pd, cur_upage);
-            free (spte);
+            pagedir_null_page (pd, cur_upage);        
         }
 }
 static bool

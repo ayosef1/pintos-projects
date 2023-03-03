@@ -24,7 +24,7 @@ struct fte *clock_hand;
 
 static void *evict (bool zeroed);
 struct fte *tick_clock_hand (void);
-static void clear_frame (void * vaddr);
+static void clear_frame (void * vaddr, bool lock_held);
 static struct fte *frame_lookup (uint8_t *kpage);
 
 void 
@@ -141,10 +141,45 @@ tick_clock_hand (void)
 /* Frees the physical frame associated with kernel virtual page KPAGE
    and all associated memory. */
 void
-frame_free_page (void *kpage)
+frame_free_page (void *kpage, bool lock_held)
 {
-    clear_frame (kpage);
+    clear_frame (kpage, lock_held);
     palloc_free_page (kpage);
+}
+
+/* Removes the frame table entry that corresponds whose physical address 
+   corresponds to the kernel virtual page KPAGE from the frame table and
+   frees the associated memory. Returns true if the entry was removed and
+   false if the entry could not be found in the table. */
+static void
+clear_frame (void * kpage, bool lock_held)
+{
+    struct fte *fte = frame_lookup (kpage);
+
+    if (!lock_held)
+        lock_acquire (&fte->lock);
+
+    if (fte->spte != NULL)
+        {
+            free (fte->spte);
+            fte->spte = NULL;
+        }
+    fte->upage = NULL;
+    /* Coudl change to do cleaning here. I.e. spt_remove_page. */
+    fte-> pd = NULL;
+    fte->pinned = true;
+    lock_release (&fte->lock);
+}
+
+/* Returns the frame table entry that corresponds to the physical frame
+   associated with the kernel virtual page KPAGE. If no such entry exists,
+   returns NULL. */
+struct fte *
+frame_lookup (uint8_t *kpage)
+{
+    ASSERT (kpage > user_kpage_base);
+    off_t table_ofs = ((kpage - user_kpage_base) / PGSIZE);
+    return frame_table_base + table_ofs;
 }
 
 /* Sets the user virtual addres of frame, whose kernel virtual address is
@@ -165,32 +200,4 @@ frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte,
     if (!keep_pinned)
         fte->pinned = false;
     lock_release (&fte->lock);
-}
-
-/* Removes the frame table entry that corresponds whose physical address 
-   corresponds to the kernel virtual page KPAGE from the frame table and
-   frees the associated memory. Returns true if the entry was removed and
-   false if the entry could not be found in the table. */
-static void
-clear_frame (void * kpage)
-{
-    struct fte *fte = frame_lookup (kpage);
-    lock_acquire (&fte->lock);
-    fte->upage = NULL;
-    /* Coudl change to do cleaning here. I.e. spt_remove_page. */
-    fte->spte = NULL;
-    fte-> pd = NULL;
-    fte->pinned = true;
-    lock_release (&fte->lock);
-}
-
-/* Returns the frame table entry that corresponds to the physical frame
-   associated with the kernel virtual page KPAGE. If no such entry exists,
-   returns NULL. */
-struct fte *
-frame_lookup (uint8_t *kpage)
-{
-    ASSERT (kpage > user_kpage_base);
-    off_t table_ofs = ((kpage - user_kpage_base) / PGSIZE);
-    return frame_table_base + table_ofs;
 }

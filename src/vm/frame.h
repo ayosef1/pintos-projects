@@ -37,9 +37,10 @@ struct fte
 void frame_table_init (uint8_t *user_pool_base, size_t user_pages);
 void frame_table_create (void);
 void frame_table_destroy (void);
+
 void *frame_get_page (bool zeroed);
 struct spte *frame_get_spte (void *kpage, bool hold);
-void frame_free_page (void *kpage);
+void frame_free_page (void *kpage, bool lock_held);
 void frame_set_udata (void *kpage, void *upage, uint32_t *pd,
                       struct spte *spte, bool keep_pinned);
 

@@ -37,6 +37,7 @@ pagedir_destroy (uint32_t *pd)
     return;
 
   ASSERT (pd != init_page_dir);
+  bool frame_lock_held = false;
   for (pde = pd; pde < pd + pd_no (PHYS_BASE); pde++)
     if (*pde & PTE_P) 
       {
@@ -46,7 +47,7 @@ pagedir_destroy (uint32_t *pd)
         for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
 #ifdef VM
           if (*pte & PTE_P)
-            frame_free_page (pte_get_page (*pte));
+            frame_free_page (pte_get_page (*pte), frame_lock_held);
           else if (*pte != 0)
             free ((struct spte *)*pte);
 #else
