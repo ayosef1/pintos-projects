@@ -34,12 +34,18 @@ static mapid_t sys_mmap (uint32_t *esp);
 static void sys_munmap (uint32_t *esp);
 
 static char *get_arg_string (void *esp, int pos, int limit);
-static void *get_arg_buffer (void *esp, int pos, int size);
+static void *get_arg_buffer (void *esp, int pos, int size, bool write_to_buffer);
 static int get_arg_int (void *esp, int pos);
 
-static bool is_valid_memory (void *buffer, unsigned size);
-static bool is_valid_address (void *uaddr);
 static bool is_valid_fd (int fd);
+
+static bool is_valid_read (void *addr, unsigned size);
+static bool is_valid_write (void *addr, unsigned size);
+static bool can_read_byte (void *uaddr);
+static bool can_write_byte (void *uaddr);
+static int get_user (const uint8_t *uaddr);
+static bool put_user (uint8_t *udst, uint8_t byte);
+
 
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
 
@@ -56,13 +62,14 @@ syscall_handler (struct intr_frame *f)
   uint32_t syscall_num;
   
   #ifdef VM
+    thread_current ()->in_syscall = true;
     thread_current ()->saved_esp = f->esp;
   #endif
 
-  if (!is_valid_address (f->esp))
+  if (!is_valid_read (f->esp, sizeof (void *)))
     exit (SYSCALL_ERROR);
 
-  syscall_num = get_arg_int(f->esp, 0);
+  syscall_num = get_arg_int (f->esp, 0);
   switch (syscall_num)
   {
     case SYS_HALT:
@@ -104,17 +111,20 @@ syscall_handler (struct intr_frame *f)
     case SYS_CLOSE:
       sys_close (f->esp);
       break;
-#ifdef VM
+  #ifdef VM
     case SYS_MMAP:
       f->eax = sys_mmap (f->esp);
       break;
     case SYS_MUNMAP:
       sys_munmap (f->esp);
       break;
-#endif
+  #endif
     default:
       exit (SYSCALL_ERROR);
   }
+  #ifdef VM
+    thread_current ()->in_syscall = false;
+  #endif
 }
 
 void
@@ -199,7 +209,11 @@ sys_open (uint32_t *esp)
 {
   int ret;
   char *fname;
-  struct thread *cur;
+  struct thread *cur = thread_current ();
+
+  /* Hit file limit. */
+  if (cur->next_fd < 0)
+    return SYSCALL_ERROR;
 
   fname = get_arg_string (esp, 1, NAME_MAX);
   if (fname == NULL)
@@ -209,9 +223,8 @@ sys_open (uint32_t *esp)
   struct file *fp = filesys_open (fname);
   lock_release (&filesys_lock);
 
-  cur = thread_current ();
-  /* File open unsuccessful or file limit hit */
-  if (fp == NULL || cur->next_fd < 0)
+  /* File open unsuccessful. */
+  if (fp == NULL)
     return SYSCALL_ERROR;
 
   ret = cur->next_fd;
@@ -266,7 +279,7 @@ sys_read (uint32_t *esp)
 
   fd = get_arg_int (esp, 1);
   size = get_arg_int (esp, 3);
-  buffer = (uint8_t *) get_arg_buffer (esp, 2, size);
+  buffer = (uint8_t *) get_arg_buffer (esp, 2, size, true);
 
   if (!is_valid_fd (fd) || fd == STDOUT_FILENO)
     {
@@ -309,7 +322,7 @@ sys_write (uint32_t *esp)
 
   fd = get_arg_int (esp, 1);
   size = get_arg_int (esp, 3);
-  buffer = get_arg_buffer (esp, 2, size);
+  buffer = get_arg_buffer (esp, 2, size, false);
 
   if (!is_valid_fd (fd) || fd == STDIN_FILENO)
     {
@@ -323,6 +336,7 @@ sys_write (uint32_t *esp)
           int to_write = remaining > BUF_MAX ? BUF_MAX : remaining;
           putbuf (buffer, to_write);
           remaining -= to_write;
+          buffer += to_write;
         }
       bytes_written = size;
     }
@@ -407,7 +421,7 @@ static mapid_t
 sys_mmap (uint32_t *esp)
 {
   int fd = get_arg_int (esp, 1);
-  void *addr = get_arg_buffer (esp, 2, 0);
+  void *addr = get_arg_buffer (esp, 2, 0, false);
   mapid_t ret = SYSCALL_ERROR;
   struct thread *cur = thread_current ();
   
@@ -486,7 +500,7 @@ get_arg_int (void *esp, int pos)
 {
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
-  if (!is_valid_memory (arg, sizeof (int)))
+  if (!is_valid_read (arg, sizeof (int)))
     exit (SYSCALL_ERROR);
 
   return *(int *)arg;
@@ -497,13 +511,16 @@ get_arg_int (void *esp, int pos)
    buffer pointer bytes or buffer bytes are in invalid
    memory. */
 static void *
-get_arg_buffer (void *esp, int pos, int size)
+get_arg_buffer (void *esp, int pos, int size, bool write_to_buffer)
 {
   void **arg;
 
   arg = (void **)esp + pos;
-  
-  if (!is_valid_memory (arg, sizeof(char *)) || !is_valid_memory (*arg, size))
+  if (!is_valid_read (arg, sizeof (char *)))
+    exit (SYSCALL_ERROR);
+  if (write_to_buffer && !is_valid_write (*arg, size))
+      exit (SYSCALL_ERROR);
+  else if (!is_valid_read (*arg, size))
     exit (SYSCALL_ERROR);
 
   return *(void **)arg;
@@ -523,7 +540,7 @@ get_arg_string (void *esp, int pos, int limit)
   str_ptr = (char **)esp + pos;
 
   /* Check the bytes of the char * are all in valid memory */
-  if (!is_valid_memory (str_ptr, sizeof (char *)))
+  if (!is_valid_read (str_ptr, sizeof (char *)))
     exit (SYSCALL_ERROR);
 
   end = *str_ptr + limit + 1;
@@ -531,7 +548,7 @@ get_arg_string (void *esp, int pos, int limit)
   
   for (cur = *str_ptr; cur < end; cur++)
     {
-      if (!is_valid_address (cur))
+      if (!can_read_byte (cur))
         exit (SYSCALL_ERROR);
       
       if (*cur == '\0')
@@ -546,31 +563,59 @@ get_arg_string (void *esp, int pos, int limit)
   return *str_ptr;
 }
 
-/* Returns whether bytes starting at START are in valid user space */
+/* Returns whether size bytes starting at addr are in valid to read from. */
 static bool 
-is_valid_memory (void *start, unsigned size)
+is_valid_read (void *addr, unsigned size)
 {
-  uint8_t *cur;
-  uint8_t *end;
-  unsigned start_offs;
-  
-  end = (uint8_t *)start + size;
-  start_offs = pg_ofs (start);
+  if (size == 0) return true;
 
-  for (cur = start - start_offs; cur < end; cur += PGSIZE)
-    {
-      if (!is_valid_address (cur))
-        return false;
-    }
+  uint8_t *page = pg_round_down (addr);
+
+  uint8_t *end_page = pg_round_down(addr + size - 1);
+
+  while (page <= end_page)
+  {
+    uint8_t *test_byte = page < (uint8_t *)addr ? addr : page;
+    if (!can_read_byte (test_byte))
+      return false;
+    page += PGSIZE;
+  }
   return true;
 }
 
-/* Returns whether VADDR is a valid memory address. This means it is
-   in user space and has been allocated in the page table */
+/* Returns whether size bytes starting at addr are in valid to write to. */
 static bool 
-is_valid_address (void *vaddr)
+is_valid_write (void *addr, unsigned size)
 {
-  return vaddr != NULL && is_user_vaddr (vaddr);
+  if (size == 0) return true;
+
+  uint8_t *page = pg_round_down (addr);
+
+  uint8_t *end_page = pg_round_down(addr + size - 1);
+
+  while (page <= end_page)
+  {
+    uint8_t *test_byte = page < (uint8_t *)addr ? addr : page;
+    if (!can_write_byte (test_byte))
+      return false;
+    page += PGSIZE;
+  }
+  return true;
+}
+
+static bool
+can_read_byte (void *vaddr)
+{
+  if (is_user_vaddr (vaddr))
+    return get_user (vaddr) != -1;
+  return false;
+}
+
+static bool can_write_byte (void *uaddr)
+{
+  if (is_user_vaddr (uaddr))
+    return put_user (uaddr, 0);
+  return false;
 }
 
 /* Returns whether FD is between 0 and MAX_FILES */
@@ -578,4 +623,29 @@ static bool
 is_valid_fd (int fd) 
 {
   return fd >= 0 && fd < MAX_FILES;
+}
+
+/* Reads a byte at user virtual address UADDR.
+   UADDR must be below PHYS_BASE.
+   Returns the byte value if successful, -1 if a segfault
+   occurred. */
+static int
+get_user (const uint8_t *uaddr)
+{
+  int result;
+  asm ("movl $1f, %0; movzbl %1, %0; 1:"
+       : "=&a" (result) : "m" (*uaddr));
+  return result;
+}
+
+/* Writes BYTE to user address UDST.
+   UDST must be below PHYS_BASE.
+   Returns true if successful, false if a segfault occurred. */
+static bool
+put_user (uint8_t *udst, uint8_t byte)
+{
+  int error_code;
+  asm ("movl $1f, %0; movb %b2, %1; 1:"
+       : "=&a" (error_code), "=m" (*udst) : "q" (byte));
+  return error_code != -1;
 }

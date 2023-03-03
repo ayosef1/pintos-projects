@@ -15,7 +15,10 @@ static long long page_fault_cnt;
 
 static void kill (struct intr_frame *);
 static void page_fault (struct intr_frame *);
+static bool try_grow_stack (struct intr_frame *f, void * fault_addr,
+                            void *fault_upage, bool user);
 static bool valid_stack_growth (void* esp, void *fault_addr);
+static void kernel_page_fault (struct intr_frame *f);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -95,8 +98,7 @@ kill (struct intr_frame *f)
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
-      thread_current ()->exit_status = -1;
-      thread_exit (); 
+      exit (-1); 
 
     case SEL_KCSEG:
       /* Kernel's code segment, which indicates a kernel bug.
@@ -155,41 +157,46 @@ page_fault (struct intr_frame *f)
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
-
-  /* Ensure we use correct esp pointer. */
-  void *esp = f->esp;
-  #ifdef VM
-   if (!user)
-      esp = thread_current ()->saved_esp;
-  #endif
-
   fault_upage = pg_round_down (fault_addr);
-
-  if (is_user_vaddr (fault_addr))
+  
+   if (is_user_vaddr (fault_addr))
    {
       if (not_present)
-         {
-            if (spt_try_load_upage (fault_upage))
-               return;
+      {
+         if (spt_try_load_upage (fault_upage))
+            return;
 
-            if (valid_stack_growth(esp, fault_addr) && 
-                spt_try_add_stack_page (fault_upage))
-               {
-                     return;
-               }
-         }
-      exit (-1); 
+         if (try_grow_stack (f, fault_addr, fault_upage, user))
+            return;
+      }
    }
+   if (!user)
+      kernel_page_fault (f);
+   #ifdef USERPROG
+      if (thread_current ()->in_syscall)
+         return;
+   #endif
 
-  /* To implement virtual memory, delete the rest of the function
-     body, and replace it with code that brings in the page to
-     which fault_addr refers. */
   printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
   kill (f);
+}
+
+static bool
+try_grow_stack (struct intr_frame *f, void *fault_addr,
+            void *fault_upage, bool user)
+{
+   /* Ensure we use correct esp pointer. */
+   #ifdef VM
+      if (!user)
+         f->esp = thread_current ()->saved_esp;
+   #endif
+   if (valid_stack_growth (f->esp, fault_addr))
+      return spt_try_add_stack_page (fault_upage);
+   return false;
 }
 
 /* Check if access is within 32 bytes of stack pointer*/
@@ -203,3 +210,9 @@ page_fault (struct intr_frame *f)
      return true;
  }
 
+ static void
+ kernel_page_fault (struct intr_frame *f)
+{
+   f->eip = (void *)f->eax;
+   f->eax = 0xffffffff;
+}
