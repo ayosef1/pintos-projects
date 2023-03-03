@@ -9,8 +9,10 @@
 #include "vm/page.h"
 #include "vm/frame.h"
 #include "vm/swap.h"
+#include <stdio.h>
 
-static bool install_file (void *kpage, struct filesys_info filesys_info);
+static bool install_file (void *kpage,
+                          struct filesys_info *filesys_info);
 
 /* Stores the mapping from the user virtual address UPAGE to the
    relevant information to load the PGSIZE segement into memory from
@@ -152,7 +154,7 @@ spt_try_load_upage (void *upage, bool keep_pinned)
     /* Assuming it is a page now. */
     if (spte->filesys_page)
         {
-            if (!install_file (kpage, disk_info.filesys_info))
+            if (!install_file (kpage, &disk_info.filesys_info))
                 goto fail;
         }
     else
@@ -187,6 +189,7 @@ spt_evict_upage (uint32_t *pd, void *upage, struct spte *spte)
         {
         case (MMAP):
             /* Only need to write if MMAP is written. */
+            printf("MMAP\n");
             if (pagedir_is_dirty(pd, upage))
                 {
                     /* Write back to memory. */
@@ -197,19 +200,25 @@ spt_evict_upage (uint32_t *pd, void *upage, struct spte *spte)
                 }
             break;
         case (EXEC):
+            printf("EXEC\n");
             /* If an executable page has never been written to, do nothing.
                Otherwise write to swap. */
             if (spte->filesys_page && (!spte->disk_info.filesys_info.writable ||
                 !pagedir_is_dirty(pd, upage)))
                 break;
         default:
+            printf("SWAP\n");
             spte->filesys_page = false; 
             spte->disk_info.swap_id = swap_write (upage);
+            printf ("EVICT: Writing to swap %zu", spte->disk_info.swap_id);
             break;
         }
         /* Need this to be atomic somehow. No other thread
         will acces but how make atomic with. The owner of the table?*/
+    printf ("SPT: Writing UPAGE %p to supplementary page table that is currently %p\n", upage, pagedir_get_page (pd, upage));
+    pagedir_null_page (pd, upage);
     pagedir_add_spte (pd, upage, spte);
+    printf ("SPT EVICT COMPLETE\n");
 }
 
 /* Removes PG_CNT consecutive mmaped user virtual pages from the current 
@@ -250,23 +259,30 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
         }
 }
 static bool
-install_file (void *kpage, struct filesys_info filesys_info)
+install_file (void *kpage, struct filesys_info *filesys_info)
 {
-    if (filesys_info.page_read_bytes == 0)
-        memset (kpage, 0, PGSIZE);
+    if (filesys_info->page_read_bytes == 0)
+        {
+            // printf ("Install File: all zeros for kpage %p\n", kpage);
+            memset (kpage, 0, PGSIZE);
+        }
+
     else
         {
-            size_t page_zero_bytes;
             /* Don't have locking here because from a page fault we will
                already have the lock */
-            int bytes_read = file_read_at (filesys_info.file, kpage, 
-                                           filesys_info.page_read_bytes,
-                                           filesys_info.ofs);
+            size_t page_zero_bytes;
+            // printf ("Install File: Reading from file %p for kpage %p\n",
+            //         filesys_info->file, kpage);
+            memset (kpage, 0, PGSIZE);
+            int bytes_read = file_read_at (filesys_info->file, kpage, 
+                                           filesys_info->page_read_bytes,
+                                           filesys_info->ofs);
 
-            if (bytes_read != (int) filesys_info.page_read_bytes)
+            if (bytes_read != (int) filesys_info->page_read_bytes)
                 return false;
-            page_zero_bytes = PGSIZE - filesys_info.page_read_bytes;
-            memset (kpage + filesys_info.page_read_bytes, 0, page_zero_bytes);
+            page_zero_bytes = PGSIZE - filesys_info->page_read_bytes;
+            memset (kpage + filesys_info->page_read_bytes, 0, page_zero_bytes);
         }
     return true;
 }

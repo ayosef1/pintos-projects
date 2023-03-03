@@ -23,7 +23,7 @@ struct lock eviction_lock;
 struct fte *clock_hand;
 
 static void *evict (bool zeroed);
-struct fte *tick_clock_hand (void);
+void tick_clock_hand (void);
 static void clear_frame (void * vaddr, bool lock_held);
 static struct fte *frame_lookup (uint8_t *kpage);
 
@@ -76,8 +76,8 @@ frame_get_page (bool zeroed)
     /* Palloc atomically allocates pages. */
     kpage = palloc_get_page (PAL_USER | (zeroed ? PAL_ZERO : 0));
     if (kpage == NULL)
-        {
-            PANIC ("Eviction not implemented");
+        {   
+
             kpage = evict (zeroed);
         }
     return kpage;
@@ -107,7 +107,9 @@ evict (bool zeroed)
     while (true)
         {
             if (!lock_try_acquire (&clock_hand->lock))
+            {
                 tick_clock_hand ();
+            }
             else if (!clock_hand->pinned)
                 {
                     if (pagedir_is_accessed (clock_hand->pd, clock_hand->upage))
@@ -118,28 +120,32 @@ evict (bool zeroed)
                         tick_clock_hand ();
                         continue;
                     }
+                    void *kpage = user_kpage_base + 
+                                  ((clock_hand - frame_table_base) * PGSIZE);
                     spt_evict_upage (clock_hand->pd, clock_hand->upage,
-                                    clock_hand->spte);
+                                     clock_hand->spte);
                     clock_hand->pinned = true;
                     lock_release (&clock_hand->lock);
                     tick_clock_hand ();
                     lock_release (&eviction_lock);
 
-                    void *kpage = user_kpage_base + 
-                                ((clock_hand - frame_table_base) * PGSIZE);
                     if (zeroed)
                         memset (kpage, 0, PGSIZE);
                     
                     return kpage;
                 }
+            lock_release (&clock_hand->lock);
             tick_clock_hand ();
         }
 }
 
-struct fte *
+void
 tick_clock_hand (void)
 {
-    return clock_hand + 1 == frame_table_end ? frame_table_base : clock_hand++;
+    if (clock_hand + 1 == frame_table_end)
+        clock_hand = frame_table_base;
+    else
+        ++clock_hand;
 }
 
 /* Frees the physical frame associated with kernel virtual page KPAGE
@@ -181,7 +187,7 @@ clear_frame (void * kpage, bool lock_held)
 struct fte *
 frame_lookup (uint8_t *kpage)
 {
-    ASSERT (kpage > user_kpage_base);
+    ASSERT (user_kpage_base <= kpage);
     off_t table_ofs = ((kpage - user_kpage_base) / PGSIZE);
     return frame_table_base + table_ofs;
 }

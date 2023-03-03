@@ -1,7 +1,9 @@
 #include <bitmap.h>
 #include "devices/block.h"
 #include "threads/synch.h"
+#include "threads/thread.h"
 #include "vm/swap.h"
+#include <stdio.h>
 
 /* Mutual exclusion of table and block_sector. */
 struct lock swap_lock;
@@ -22,8 +24,9 @@ bool
 swap_try_read (size_t start_id, void *upage)
 {
     bool ret = true;
+    printf("SWAP READ ACQUIRED\n");
     lock_acquire (&swap_lock);
-    for (size_t id = start_id; id < SECTORS_PER_SLOT; id++)
+    for (size_t id = start_id; id < start_id + SECTORS_PER_SLOT; id++)
         {
             if (!bitmap_test (used_map, start_id))
                 {
@@ -33,6 +36,7 @@ swap_try_read (size_t start_id, void *upage)
             block_read (swap_block, id, upage + id * SECTORS_PER_SLOT);
             bitmap_reset (used_map, id);
         }
+    printf("SWAP READ RELEASED\n");
     lock_release (&swap_lock);
     return ret;
 }
@@ -40,28 +44,32 @@ swap_try_read (size_t start_id, void *upage)
 size_t
 swap_write (void *upage)
 {
+    printf("SWAP WRITE ACQUIRED\n");
     lock_acquire (&swap_lock);
-
     size_t start_id = bitmap_scan_and_flip (used_map, 0, SECTORS_PER_SLOT,
                                             false);
+    
     if (start_id == BITMAP_ERROR)
         PANIC ("Swap is full");
-    
-    for (block_sector_t id = start_id; id < SECTORS_PER_SLOT; id++)
+
+    for (block_sector_t id = start_id; id < start_id + SECTORS_PER_SLOT; id++)
         {
             block_write (swap_block, id, upage + id * SECTORS_PER_SLOT);
         }
     lock_release (&swap_lock);
+    printf("SWAP WRITE RELEASE\n");
     return start_id;
 }
 
 void 
 swap_free (size_t start_id)
 {
+    printf("SWAP LOCK ACQUIRED\n");
     lock_acquire (&swap_lock);
-    for (size_t id = start_id; id < SECTORS_PER_SLOT; id++)
+    for (size_t id = start_id; id < start_id + SECTORS_PER_SLOT; id++)
         {
             bitmap_reset (used_map, id);
         }
     lock_release (&swap_lock);
+    printf("SWAP LOCK RELEASE\n");
 }

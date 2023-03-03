@@ -173,7 +173,7 @@ page_fault (struct intr_frame *f)
                      return;
                }
          }
-      exit (-1); 
+      exit (-1);
    }
 
   /* To implement virtual memory, delete the rest of the function
