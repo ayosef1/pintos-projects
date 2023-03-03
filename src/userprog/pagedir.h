@@ -13,7 +13,8 @@ bool pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool rw);
 void *pagedir_get_page (uint32_t *pd, const void *upage);
 #ifdef VM
 bool pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte);
-struct spte *pagedir_get_spte (uint32_t *pd, const void *uaddr, bool hold);
+struct spte *pagedir_get_spte (uint32_t *pd, const void *uaddr,
+                               bool hold_spte);
 bool pagedir_is_present (uint32_t *pd, const void *upage);
 void pagedir_null_page (uint32_t *pd, void *upage);
 #endif

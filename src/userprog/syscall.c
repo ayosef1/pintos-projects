@@ -209,8 +209,15 @@ sys_open (uint32_t *esp)
 
   cur = thread_current ();
   /* File open unsuccessful or file limit hit */
-  if (fp == NULL || cur->next_fd < 0)
+  if (fp == NULL)
     return SYSCALL_ERROR;
+  
+  if (cur->next_fd < 0)
+    {
+      file_close (fp);
+      return SYSCALL_ERROR;
+    }
+
 
   ret = cur->next_fd;
   cur->fdtable[ret] = fp;

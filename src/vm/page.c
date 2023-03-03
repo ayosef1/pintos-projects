@@ -33,7 +33,7 @@ spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
     struct spte * spte;
 
     uint32_t * pd = thread_current ()->pagedir;
-    if (pagedir_get_spte (pd, upage, false))
+    if (pagedir_get_spte (pd, upage, false) != NULL)
         return NULL;
 
     spte = malloc (sizeof (struct spte));
@@ -67,15 +67,17 @@ spt_try_add_stack_page (void *upage)
   
   /* Checks each spte not there and upage. */
   spte = spt_try_add_upage (upage, TMP, true, false, &empty_disk_info);
-  if (spte != NULL)
-    {
-        pd = thread_current ()->pagedir;
-        pagedir_set_page (pd, upage, kpage, true);
-        memset (upage, 0, PGSIZE);
-        frame_set_udata (kpage, upage, pd, spte, false);
-        return true;
-    }
-return false;
+  if (spte == NULL)
+    return false;
+
+  pd = thread_current ()->pagedir;
+  if (!pagedir_set_page (pd, upage, kpage, true) )
+    return false;
+
+  memset (upage, 0, PGSIZE);
+  frame_set_udata (kpage, upage, pd, spte, false);
+
+  return true;
 }
 
 /* Attempts to add PG_CNT consecutive user virtual pages starting from 
@@ -97,8 +99,8 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
 
   for (pg = 0; pg < pg_cnt - 1; pg += 1)
     {
-        if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
-                                &disk_info))
+        if (spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
+                                &disk_info) == NULL)
             {
                 spt_remove_mmap_pages (begin_upage, pg);
                 return false;
@@ -108,8 +110,8 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
   
   /* Final case. */
   disk_info.filesys_info.page_read_bytes = final_read_bytes % PGSIZE;
-  if (!spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
-                          &disk_info))
+  if (spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
+                          &disk_info) == NULL)
     {
         spt_remove_mmap_pages (begin_upage, pg);
         return false;

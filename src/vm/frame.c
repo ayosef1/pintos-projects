@@ -76,22 +76,26 @@ frame_get_page (bool zeroed)
     /* Palloc atomically allocates pages. */
     kpage = palloc_get_page (PAL_USER | (zeroed ? PAL_ZERO : 0));
     if (kpage == NULL)
-        kpage = evict (zeroed);
+        {
+            PANIC ("Eviction not implemented");
+            kpage = evict (zeroed);
+        }
     return kpage;
 }
 
 struct spte *
-frame_get_spte (void * kpage, bool hold)
+frame_get_spte (void * kpage, bool hold_lock)
 {
     struct spte * spte;
     struct fte *fte = frame_lookup (kpage);
     if (kpage == NULL)
         return NULL;
 
-    if (hold)
-        lock_acquire (&fte->lock);
-
+    lock_acquire (&fte->lock);
     spte = fte->spte;
+    if (!hold_lock)
+        lock_release (&fte->lock);
+    
     return spte;
 }
 

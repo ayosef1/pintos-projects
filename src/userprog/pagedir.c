@@ -155,7 +155,7 @@ pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte)
 
 /* TODO: this will no longer be valid when we implement proper sharing! */
 struct spte *
-pagedir_get_spte (uint32_t *pd, const void *uaddr, bool hold) 
+pagedir_get_spte (uint32_t *pd, const void *uaddr, bool hold_spte) 
 {
   uint32_t *pte;
 
@@ -167,7 +167,7 @@ pagedir_get_spte (uint32_t *pd, const void *uaddr, bool hold)
       if ((*pte & PTE_P) != 0)
         {
           void * kpage = pte_get_page (*pte) + pg_ofs (uaddr);
-          return frame_get_spte (kpage, hold);
+          return frame_get_spte (kpage, hold_spte);
         }
       else
         return *pte == 0 ? NULL : (struct spte *) *pte;
