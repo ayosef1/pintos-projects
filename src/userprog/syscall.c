@@ -54,6 +54,10 @@ static void
 syscall_handler (struct intr_frame *f) 
 {
   uint32_t syscall_num;
+  
+  #ifdef VM
+    thread_current ()->saved_esp = f->esp;
+  #endif
 
   if (!is_valid_address (f->esp))
     exit (SYSCALL_ERROR);

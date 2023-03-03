@@ -175,6 +175,7 @@ struct thread
 #endif
 #ifdef VM
    struct hash mmap_table;             /* Memory map table. */
+   void *saved_esp;
 #endif
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
