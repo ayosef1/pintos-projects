@@ -63,7 +63,9 @@ palloc_init (size_t user_page_limit)
   init_pool (&user_pool, free_start + kernel_pages * PGSIZE,
              user_pages, "user pool");
 #ifdef VM
-  frame_table_init (free_start + (kernel_pages * PGSIZE), user_pages - 1);
+  size_t num_frames = user_pages - 
+                    ((user_pool.base - (uint8_t *)user_pool.used_map) / PGSIZE);
+  frame_table_init (user_pool.base, num_frames);
 #endif
 }
 

@@ -6,8 +6,8 @@
 #include "threads/pte.h"
 #include "threads/palloc.h"
 #ifdef VM
+#include "threads/malloc.h"
 #include "vm/frame.h"
-#include <stdio.h>
 #endif
 
 static uint32_t *active_pd (void);
@@ -37,6 +37,7 @@ pagedir_destroy (uint32_t *pd)
     return;
 
   ASSERT (pd != init_page_dir);
+  bool frame_lock_held = false;
   for (pde = pd; pde < pd + pd_no (PHYS_BASE); pde++)
     if (*pde & PTE_P) 
       {
@@ -44,15 +45,16 @@ pagedir_destroy (uint32_t *pd)
         uint32_t *pte;
         
         for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P)
-          {
 #ifdef VM
-            frame_free_page (pte_get_page (*pte));
+          if (*pte & PTE_P)
+            frame_free_page (pte_get_page (*pte), frame_lock_held);
+          else if (*pte != 0)
+            free ((struct spte *)*pte);
 #else
+          if (*pte &PTE_P)
             palloc_free_page (pte_get_page (*pte));
-#endif
-          }
         palloc_free_page (pt);
+#endif
       }
   palloc_free_page (pd);
 }
@@ -144,7 +146,6 @@ pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte)
   if (pte != NULL) 
     {
       ASSERT ((*pte & PTE_P) == 0);
-      // printf ("Store spte with address %p in entry for uaddr %p\n", spte, upage);
       *pte = (uint32_t) spte;
       return true;
     }
@@ -154,7 +155,7 @@ pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte)
 
 /* TODO: this will no longer be valid when we implement proper sharing! */
 struct spte *
-pagedir_get_spte (uint32_t *pd, const void *uaddr) 
+pagedir_get_spte (uint32_t *pd, const void *uaddr, bool hold_spte) 
 {
   uint32_t *pte;
 
@@ -166,7 +167,7 @@ pagedir_get_spte (uint32_t *pd, const void *uaddr)
       if ((*pte & PTE_P) != 0)
         {
           void * kpage = pte_get_page (*pte) + pg_ofs (uaddr);
-          return frame_get_spte (kpage);
+          return frame_get_spte (kpage, hold_spte);
         }
       else
         return *pte == 0 ? NULL : (struct spte *) *pte;

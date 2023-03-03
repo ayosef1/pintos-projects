@@ -79,14 +79,15 @@ struct spte
         struct hash_elem hash_elem;     /* Page Table hash elem. */
     };
 
-struct spte *spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
-                        bool filesys_page, union disk_info *disk_info);
+struct spte *spt_try_add_upage (void *upage, enum page_type type, 
+                                bool in_memory, bool filesys_page,
+                                union disk_info *disk_info);
 bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
                             size_t final_read_bytes);
 bool spt_try_add_stack_page (void *upage);
+bool spt_try_load_upage (void *upage, bool pinned);
 void spt_remove_mmap_pages (void * begin_upage, int num_pages);
-void spt_evict_upage (void *upage, uint32_t *pd, struct spte *spte);
-bool spt_try_load_upage (void *upage);
+void spt_evict_upage (uint32_t *pd, void *upage, struct spte *spte);
 unsigned spt_hash (const struct hash_elem *p_, void *aux);
 bool spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
                 void *aux);

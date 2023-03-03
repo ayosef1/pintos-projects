@@ -526,10 +526,11 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
       /* Lazy load */
 #ifdef VM
-      if (!spt_try_add_upage (upage, EXEC, false, true, &disk_info))
+      if (spt_try_add_upage (upage, EXEC, false, true, &disk_info) == 
+          NULL)
         return false;
 #else
-      uint8_t *kpage = frame_get_page (PAL_USER);
+      uint8_t *kpage = palloc_get_page (PAL_USER);
       if (kpage == NULL)
         return false;
 

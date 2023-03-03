@@ -226,6 +226,13 @@ sys_open (uint32_t *esp)
   /* File open unsuccessful. */
   if (fp == NULL)
     return SYSCALL_ERROR;
+  
+  if (cur->next_fd < 0)
+    {
+      file_close (fp);
+      return SYSCALL_ERROR;
+    }
+
 
   ret = cur->next_fd;
   cur->fdtable[ret] = fp;
@@ -456,7 +463,8 @@ sys_mmap (uint32_t *esp)
       /* Check not already mapped. */
       /* TODO: Change this to pagedir_get_spt when implemented
          correctly. */
-      if (pagedir_get_spte (cur->pagedir, addr) != NULL)
+      if (pagedir_get_spte (cur->pagedir, addr, false) != NULL)
+        /* Should you release the lock? */
         goto done;
     }
 
