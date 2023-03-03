@@ -167,7 +167,7 @@ page_fault (struct intr_frame *f)
             if (spt_try_load_upage (fault_upage, false))
                return;
 
-            if (valid_stack_growth(f->esp, fault_addr) && 
+            if (valid_stack_growth(stack_ptr, fault_addr) && 
                 spt_try_add_stack_page (fault_upage))
                {
                      return;
