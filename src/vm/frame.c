@@ -213,7 +213,7 @@ frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte,
 }
 
 void
-frame_try_pin (void *upage, uint32_t *pd)
+frame_set_pin (void *upage, uint32_t *pd, bool pin)
 {
     void *kpage;
     struct fte *fte;
@@ -226,6 +226,6 @@ frame_try_pin (void *upage, uint32_t *pd)
     if (kpage == NULL)
         return;
     lock_acquire (&fte->lock);
-    fte->pinned = true;
+    fte->pinned = pin;
     lock_release (&fte->lock);
 }

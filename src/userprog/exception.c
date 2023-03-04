@@ -166,7 +166,7 @@ page_fault (struct intr_frame *f)
       if (not_present)
       {
          // printf("PAGE_FAULT ABOUT TO CALL SPT_TRY_LOAD_UPAGE\n");
-         if (spt_try_load_upage (fault_upage, thread_current ()->in_syscall))
+         if (spt_try_load_upage (fault_upage, false))
             return;
          // printf("PAGE_FAULT ABOUT TO CALL SPT_TRY_GROW_STACK\n");
          if (try_grow_stack (f, fault_addr, fault_upage, user))

@@ -37,15 +37,19 @@ static void sys_munmap (uint32_t *esp);
 static char *get_arg_string (void *esp, int pos, int limit);
 static void *get_arg_buffer (void *esp, int pos, int size, bool write_to_buffer);
 static int get_arg_int (void *esp, int pos);
+static void *get_arg_ptr (void *esp, int pos);
 
 static bool is_valid_fd (int fd);
+static bool is_valid_read (void *addr, unsigned size, bool pin);
+static bool is_valid_write (void *addr, unsigned size, bool pin);
 
-static bool is_valid_read (void *addr, unsigned size);
-static bool is_valid_write (void *addr, unsigned size);
 static bool can_read_byte (void *uaddr);
 static bool can_write_byte (void *uaddr);
+
 static int get_user (const uint8_t *uaddr);
 static bool put_user (uint8_t *udst, uint8_t byte);
+
+static void pin_pages (void *start_page, void *end_page);
 
 
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
@@ -67,7 +71,7 @@ syscall_handler (struct intr_frame *f)
     thread_current ()->saved_esp = f->esp;
   #endif
 
-  if (!is_valid_read (f->esp, sizeof (void *)))
+  if (!is_valid_read (f->esp, sizeof (void *), false))
     exit (SYSCALL_ERROR);
 
   syscall_num = get_arg_int (f->esp, 0);
@@ -268,7 +272,6 @@ sys_filesize (uint32_t *esp)
 int
 sys_read (uint32_t *esp)
 {
-
   int fd;
   uint8_t *buffer;
   unsigned size;
@@ -299,7 +302,7 @@ sys_read (uint32_t *esp)
           return SYSCALL_ERROR;
 
         lock_acquire (&filesys_lock);
-        bytes_read = file_read(fp, buffer, size);
+        bytes_read = file_read (fp, buffer, size);
         lock_release (&filesys_lock);
     }
   
@@ -364,7 +367,7 @@ sys_seek (uint32_t *esp)
   pos = get_arg_int (esp, 2);
   cur = thread_current ();
 
-  if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
+  if (!is_valid_fd (fd) || cur->fdtable[fd] == NULL)
     exit (SYSCALL_ERROR);
   
   file_seek (cur->fdtable[fd], pos);
@@ -405,7 +408,7 @@ static mapid_t
 sys_mmap (uint32_t *esp)
 {
   int fd = get_arg_int (esp, 1);
-  void *addr = get_arg_buffer (esp, 2, 0, false);
+  void *addr = get_arg_ptr (esp, 2);
   mapid_t mapid = SYSCALL_ERROR;
   struct thread *cur = thread_current ();
   
@@ -489,10 +492,21 @@ get_arg_int (void *esp, int pos)
 {
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
-  if (!is_valid_read (arg, sizeof (int)))
+  if (!is_valid_read (arg, sizeof (int), false))
     exit (SYSCALL_ERROR);
 
   return *(int *)arg;
+}
+
+static void *
+get_arg_ptr (void *esp, int pos)
+{
+  uint32_t *arg;
+  arg = (uint32_t *)esp + pos;
+  if (!is_valid_read (arg, sizeof (int), false))
+    exit (SYSCALL_ERROR);
+  
+  return *(void**)arg;
 }
 
 /* Returns the buffer at position POS on stack pointed at
@@ -505,11 +519,11 @@ get_arg_buffer (void *esp, int pos, int size, bool write_to_buffer)
   void **arg;
 
   arg = (void **)esp + pos;
-  if (!is_valid_read (arg, sizeof (char *)))
+  if (!is_valid_read (arg, sizeof (char *), false))
     exit (SYSCALL_ERROR);
-  if (write_to_buffer && !is_valid_write (*arg, size))
-      exit (SYSCALL_ERROR);
-  else if (!is_valid_read (*arg, size))
+  if (write_to_buffer && !is_valid_write (*arg, size, true))
+    exit (SYSCALL_ERROR);
+  else if (!is_valid_read (*arg, size, true))
     exit (SYSCALL_ERROR);
 
   return *(void **)arg;
@@ -529,12 +543,12 @@ get_arg_string (void *esp, int pos, int limit)
   str_ptr = (char **)esp + pos;
 
   /* Check the bytes of the char * are all in valid memory */
-  if (!is_valid_read (str_ptr, sizeof (char *)))
+  if (!is_valid_read (str_ptr, sizeof (char *), false))
     exit (SYSCALL_ERROR);
 
   end = *str_ptr + limit + 1;
 
-  
+  int len = 0;
   for (cur = *str_ptr; cur < end; cur++)
     {
       if (!can_read_byte (cur))
@@ -542,59 +556,60 @@ get_arg_string (void *esp, int pos, int limit)
       
       if (*cur == '\0')
         break;
-      
+      len++;
     }
   
   /* Either empty string of greater than LIMIT */
   if (cur == *str_ptr || cur == end)
     return NULL;
   
+  pin_pages (*str_ptr, pg_round_down (*str_ptr + len + 1));
   return *str_ptr;
 }
 
 /* Returns whether size bytes starting at addr are in valid to read from. */
 static bool 
-is_valid_read (void *addr, unsigned size)
+is_valid_read (void *addr, unsigned size, bool pin)
 {
   if (size == 0) return true;
 
-  uint8_t *page = pg_round_down (addr);
+  uint8_t *start_page = pg_round_down (addr);
 
   uint8_t *end_page = pg_round_down(addr + size - 1);
 
+  uint8_t *page = start_page;
   while (page <= end_page)
-  {
-    if (is_user_vaddr (page))
-      frame_try_pin (page, thread_current ()->pagedir);
-      
+  {    
     uint8_t *test_byte = page < (uint8_t *)addr ? addr : page;
     if (!can_read_byte (test_byte))
       return false;
     page += PGSIZE;
   }
+  if (pin)
+    pin_pages (start_page, end_page);
   return true;
 }
 
 /* Returns whether size bytes starting at addr are in valid to write to. */
 static bool 
-is_valid_write (void *addr, unsigned size)
+is_valid_write (void *addr, unsigned size, bool pin)
 {
   if (size == 0) return true;
 
-  uint8_t *page = pg_round_down (addr);
+  uint8_t *start_page = pg_round_down (addr);
 
   uint8_t *end_page = pg_round_down(addr + size - 1);
 
+  uint8_t *page = start_page;
   while (page <= end_page)
   {
-    if (is_user_vaddr (page))
-      frame_try_pin (page, thread_current ()->pagedir);
-
     uint8_t *test_byte = page < (uint8_t *)addr ? addr : page;
     if (!can_write_byte (test_byte))
       return false;
     page += PGSIZE;
   }
+  if (pin)
+    pin_pages (start_page, end_page);
   return true;
 }
 
@@ -643,4 +658,15 @@ put_user (uint8_t *udst, uint8_t byte)
   asm ("movl $1f, %0; movb %b2, %1; 1:"
        : "=&a" (error_code), "=m" (*udst) : "q" (byte));
   return error_code != -1;
+}
+
+static void
+pin_pages (void *start_page, void *end_page)
+{
+  void *page = start_page;
+  while (page <= end_page)
+  {
+    frame_set_pin (page, thread_current ()->pagedir, true);
+    page += PGSIZE;
+  }
 }
