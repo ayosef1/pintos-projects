@@ -43,5 +43,6 @@ struct spte *frame_get_spte (void *kpage, bool hold);
 void frame_free_page (void *kpage, bool lock_held);
 void frame_set_udata (void *kpage, void *upage, uint32_t *pd,
                       struct spte *spte, bool keep_pinned);
+void frame_try_pin (void *upage, uint32_t *pd);
 
 #endif /* vm/frame.h */

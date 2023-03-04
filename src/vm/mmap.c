@@ -12,7 +12,7 @@ static void mmap_destructor_fn (struct hash_elem *e, void *aux UNUSED);
    that is not in the mapping. Returns -1 if couldn't malloc memory
    otherwise the new mapid.  */
 mapid_t
-mmap_insert (void *begin_upage, int pg_cnt)
+mmap_insert (void *begin_upage, int pg_cnt, struct file *fp)
 {
   struct thread * cur;
   mapid_t mapid;
@@ -23,8 +23,10 @@ mmap_insert (void *begin_upage, int pg_cnt)
     return -1;
 
   cur = thread_current ();
-  /* Verified in caller function that new_fd is not -1. */
+  /* Adding file to fd table so isn't allocated to another file. */
   mapid = cur->next_fd;
+  cur->fdtable[mapid] = fp;
+  thread_update_next_fd (cur);
 
   new_entry->begin_upage = begin_upage;
   new_entry->pg_cnt = pg_cnt;

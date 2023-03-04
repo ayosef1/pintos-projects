@@ -14,6 +14,7 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 #include "userprog/syscall.h"
+#include "vm/frame.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -61,8 +62,8 @@ syscall_handler (struct intr_frame *f)
 {
   uint32_t syscall_num;
   
+  thread_current ()->in_syscall = true;
   #ifdef VM
-    thread_current ()->in_syscall = true;
     thread_current ()->saved_esp = f->esp;
   #endif
 
@@ -237,18 +238,7 @@ sys_open (uint32_t *esp)
   ret = cur->next_fd;
   cur->fdtable[ret] = fp;
   
-  /* Find next available fd */
-  int new_fd = EXEC_FD + 1;
-  for (; new_fd < MAX_FILES; new_fd++) 
-    {
-      if (cur->fdtable[new_fd] == NULL)
-      {
-        cur->next_fd = new_fd;
-        return ret;
-      }
-    }
-
-  cur->next_fd = SYSCALL_ERROR;
+  thread_update_next_fd (cur);
   return ret;
 
 }
@@ -406,20 +396,7 @@ sys_close (uint32_t *esp)
     return;
   
   struct thread *cur = thread_current ();
-  struct file *fp = cur->fdtable[fd];
-
-  /* Have previously closed the given file descriptor. */
-  if (fp == NULL)
-    return;
-  
-  lock_acquire (&filesys_lock);
-  file_close (fp);
-  lock_release (&filesys_lock);
-
-  cur->fdtable[fd] = NULL;
-
-  if (fd < cur->next_fd)
-    cur->next_fd = fd;
+  thread_close_fd (cur, fd);
 
 }
 
@@ -429,10 +406,11 @@ sys_mmap (uint32_t *esp)
 {
   int fd = get_arg_int (esp, 1);
   void *addr = get_arg_buffer (esp, 2, 0, false);
-  mapid_t ret = SYSCALL_ERROR;
+  mapid_t mapid = SYSCALL_ERROR;
   struct thread *cur = thread_current ();
   
   struct file *fp;
+  struct file *mmap_fp;
   off_t file_len;
   int pg_cnt;
 
@@ -469,23 +447,24 @@ sys_mmap (uint32_t *esp)
     }
 
   lock_acquire (&filesys_lock);
-  fp = file_reopen (fp);
+  mmap_fp = file_reopen (fp);
   lock_release (&filesys_lock);
   
   if (fp == NULL)
     goto done;
   
-  if (!spt_try_add_mmap_pages (addr, fp, pg_cnt, file_len % PGSIZE))
-    {
+  if (!spt_try_add_mmap_pages (addr, mmap_fp, pg_cnt, file_len % PGSIZE))
       goto done;
-    }
 
-  ret = mmap_insert (addr, pg_cnt);
-  if (ret == -1)
+  mapid = mmap_insert (addr, pg_cnt, mmap_fp);
+  if (mapid == -1)
+  {
     spt_remove_mmap_pages (addr, pg_cnt);
+    thread_close_fd (cur, mapid);
+  }
 
   done:
-    return ret;
+    return mapid;
 }
 
 void 
@@ -495,7 +474,9 @@ sys_munmap (uint32_t *esp)
   struct mmap_table_entry *entry = mmap_find (mapid);
   if (entry == NULL)
     return;
+
   spt_remove_mmap_pages (entry->begin_upage, entry->pg_cnt);
+  thread_close_fd (thread_current (), mapid);
   mmap_remove (mapid);
 }
 #endif
@@ -583,6 +564,9 @@ is_valid_read (void *addr, unsigned size)
 
   while (page <= end_page)
   {
+    if (is_user_vaddr (page))
+      frame_try_pin (page, thread_current ()->pagedir);
+      
     uint8_t *test_byte = page < (uint8_t *)addr ? addr : page;
     if (!can_read_byte (test_byte))
       return false;
@@ -603,6 +587,9 @@ is_valid_write (void *addr, unsigned size)
 
   while (page <= end_page)
   {
+    if (is_user_vaddr (page))
+      frame_try_pin (page, thread_current ()->pagedir);
+
     uint8_t *test_byte = page < (uint8_t *)addr ? addr : page;
     if (!can_write_byte (test_byte))
       return false;

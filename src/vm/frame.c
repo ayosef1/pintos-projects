@@ -27,7 +27,7 @@ void tick_clock_hand (void);
 static void clear_frame (void * vaddr, bool lock_held);
 static struct fte *frame_lookup (uint8_t *kpage);
 
-void 
+void
 frame_table_init (uint8_t *user_pool_base, size_t num_user_pages)
 {
     num_frames = num_user_pages;
@@ -77,7 +77,7 @@ frame_get_page (bool zeroed)
     kpage = palloc_get_page (PAL_USER | (zeroed ? PAL_ZERO : 0));
     if (kpage == NULL)
         {   
-
+            // printf("Frame Table is full. About to Evict\n");
             kpage = evict (zeroed);
         }
     return kpage;
@@ -120,10 +120,10 @@ evict (bool zeroed)
                         tick_clock_hand ();
                         continue;
                     }
+                    // printf("EVICT FOUND UPAGE TO REMOVE: %p\n", clock_hand->upage);
                     void *kpage = user_kpage_base + 
                                   ((clock_hand - frame_table_base) * PGSIZE);
-                    spt_evict_upage (clock_hand->pd, clock_hand->upage,
-                                     clock_hand->spte);
+                    spt_evict_kpage (kpage, clock_hand->pd, clock_hand->spte);
                     clock_hand->pinned = true;
                     lock_release (&clock_hand->lock);
                     tick_clock_hand ();
@@ -132,6 +132,7 @@ evict (bool zeroed)
                     if (zeroed)
                         memset (kpage, 0, PGSIZE);
                     
+                    // printf("Successsfully evicted. Frame to return %p\n", kpage);
                     return kpage;
                 }
             lock_release (&clock_hand->lock);
@@ -175,7 +176,6 @@ clear_frame (void * kpage, bool lock_held)
             fte->spte = NULL;
         }
     fte->upage = NULL;
-    /* Coudl change to do cleaning here. I.e. spt_remove_page. */
     fte-> pd = NULL;
     fte->pinned = true;
     lock_release (&fte->lock);
@@ -209,5 +209,23 @@ frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte,
     fte->spte = spte;
     if (!keep_pinned)
         fte->pinned = false;
+    lock_release (&fte->lock);
+}
+
+void
+frame_try_pin (void *upage, uint32_t *pd)
+{
+    void *kpage;
+    struct fte *fte;
+    
+    kpage = pagedir_get_page (pd, upage);
+    if (kpage == NULL)
+        return;
+
+    fte = frame_lookup (kpage);
+    if (kpage == NULL)
+        return;
+    lock_acquire (&fte->lock);
+    fte->pinned = true;
     lock_release (&fte->lock);
 }

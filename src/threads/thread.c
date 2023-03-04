@@ -14,6 +14,7 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #endif
 #ifdef VM
 #include "vm/page.h"
@@ -843,6 +844,42 @@ thread_compare_priority (const struct list_elem *a,
   struct thread *t1 = list_entry (a, struct thread, elem);
   struct thread *t2 = list_entry (b, struct thread, elem);
   return t1->priority < t2->priority;
+}
+
+/* Updates' the thread T's next fd to the next available fd. */
+void
+thread_update_next_fd (struct thread *t)
+{
+  int next_fd = EXEC_FD + 1;
+  for (; next_fd < MAX_FILES; next_fd++) 
+    {
+      if (t->fdtable[next_fd] == NULL)
+      {
+        t->next_fd = next_fd;
+        return;
+      }
+    }
+
+  t->next_fd = -1;
+}
+
+void
+thread_close_fd (struct thread *t, int fd)
+{
+  struct file *fp = t->fdtable[fd];
+
+  /* Have previously closed the given file descriptor. */
+  if (fp == NULL)
+    return;
+  
+  lock_acquire (&filesys_lock);
+  file_close (fp);
+  lock_release (&filesys_lock);
+
+  t->fdtable[fd] = NULL;
+
+  if (fd < t->next_fd)
+    t->next_fd = fd;
 }
 
 

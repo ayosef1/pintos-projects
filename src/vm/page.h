@@ -87,7 +87,7 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
 bool spt_try_add_stack_page (void *upage);
 bool spt_try_load_upage (void *upage, bool pinned);
 void spt_remove_mmap_pages (void * begin_upage, int num_pages);
-void spt_evict_upage (uint32_t *pd, void *upage, struct spte *spte);
+void spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte);
 unsigned spt_hash (const struct hash_elem *p_, void *aux);
 bool spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
                 void *aux);

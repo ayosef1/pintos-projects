@@ -2,6 +2,7 @@
 #define VM_MMAP_H
 
 #include <hash.h>
+#include "filesys/file.h"
 
 typedef int mapid_t;
 
@@ -14,7 +15,7 @@ struct mmap_table_entry
     };
 
 void mmap_destroy (void);
-mapid_t mmap_insert (void *begin_upage, int pg_cnt);
+mapid_t mmap_insert (void *begin_upage, int pg_cnt, struct file *fp);
 void mmap_remove (mapid_t mapid);
 struct mmap_table_entry * mmap_find (mapid_t mapid);
 unsigned mmap_hash (const struct hash_elem *m_, void *aux UNUSED);

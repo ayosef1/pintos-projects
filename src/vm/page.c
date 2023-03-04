@@ -88,7 +88,8 @@ spt_try_add_stack_page (void *upage)
    read bytes except the final page which has FINAL_READ_BYTES read bytes.
    
    Returns true on success of adding mappings for all pages. */
-bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
+bool 
+spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
                             size_t final_read_bytes)
 {
   union disk_info disk_info;
@@ -99,24 +100,24 @@ bool spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
   disk_info.filesys_info.ofs = 0;
   disk_info.filesys_info.writable = true;
 
-  for (pg = 0; pg < pg_cnt - 1; pg += 1)
+  for (pg = 0; pg < pg_cnt; pg += 1)
     {
+        if (pg == pg_cnt - 1)
+            disk_info.filesys_info.page_read_bytes = final_read_bytes;
+
         if (spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
                                 &disk_info) == NULL)
             {
                 spt_remove_mmap_pages (begin_upage, pg);
+
+                lock_acquire (&filesys_lock);
+                file_close (fp);
+                lock_release (&filesys_lock);
+
                 return false;
             }
+            
         disk_info.filesys_info.ofs += PGSIZE;
-    }
-  
-  /* Final case. */
-  disk_info.filesys_info.page_read_bytes = final_read_bytes % PGSIZE;
-  if (spt_try_add_upage (begin_upage + (pg * PGSIZE), MMAP, false, true,
-                          &disk_info) == NULL)
-    {
-        spt_remove_mmap_pages (begin_upage, pg);
-        return false;
     }
   return true;
 }
@@ -139,7 +140,7 @@ spt_try_load_upage (void *upage, bool keep_pinned)
 
     bool hold_frame_lock = false;
 
-    spte = pagedir_get_spte (pd, upage, false);
+    spte = pagedir_get_spte (pd, upage, hold_frame_lock);
     if (spte == NULL)
         /* We acquire a lock here if in memory. Should we check this? */
         return false;
@@ -154,16 +155,19 @@ spt_try_load_upage (void *upage, bool keep_pinned)
     /* Assuming it is a page now. */
     if (spte->filesys_page)
         {
+            // printf ("Reading UPAGE %p from FILESYS\n", upage);
             if (!install_file (kpage, &disk_info.filesys_info))
                 goto fail;
         }
     else
         {
-            if (!swap_try_read (disk_info.swap_id, upage))
+            // printf ("Reading UPAGE %p from SWAP sector %zu \n", upage, disk_info.swap_id);
+            if (!swap_try_read (disk_info.swap_id, kpage))
                 goto fail;
         }
-
-    // TODO: is it right to do this after installing?
+    
+    /* Do this after to prevent a write violation when writing to
+       the page. */
     if (!pagedir_set_page (pd, upage, kpage, writable)) 
         goto fail;
 
@@ -179,7 +183,7 @@ spt_try_load_upage (void *upage, bool keep_pinned)
 }
 
 void
-spt_evict_upage (uint32_t *pd, void *upage, struct spte *spte)
+spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
 {
      /*
      Determine what to do based on the spte.
@@ -189,36 +193,36 @@ spt_evict_upage (uint32_t *pd, void *upage, struct spte *spte)
         {
         case (MMAP):
             /* Only need to write if MMAP is written. */
-            printf("MMAP\n");
-            if (pagedir_is_dirty(pd, upage))
+            // printf("MMAP\n");
+            if (pagedir_is_dirty(pd, spte->upage))
                 {
                     /* Write back to memory. */
                     lock_acquire (&filesys_lock);
-                    file_write_at (spte->disk_info.filesys_info.file, upage,
+                    file_write_at (spte->disk_info.filesys_info.file, kpage,
                                    PGSIZE, spte->disk_info.filesys_info.ofs);
                     lock_release (&filesys_lock);
                 }
             break;
         case (EXEC):
-            printf("EXEC\n");
+            // printf("EXEC\n");
             /* If an executable page has never been written to, do nothing.
                Otherwise write to swap. */
             if (spte->filesys_page && (!spte->disk_info.filesys_info.writable ||
-                !pagedir_is_dirty(pd, upage)))
+                !pagedir_is_dirty(pd, spte->upage)))
                 break;
         default:
-            printf("SWAP\n");
+            // printf("SWAP\n");
             spte->filesys_page = false; 
-            spte->disk_info.swap_id = swap_write (upage);
-            printf ("EVICT: Writing to swap %zu", spte->disk_info.swap_id);
+            spte->disk_info.swap_id = swap_write (kpage);
+            // printf ("EVICT: Writing to swap %zu\n", spte->disk_info.swap_id);
             break;
         }
         /* Need this to be atomic somehow. No other thread
         will acces but how make atomic with. The owner of the table?*/
-    printf ("SPT: Writing UPAGE %p to supplementary page table that is currently %p\n", upage, pagedir_get_page (pd, upage));
-    pagedir_null_page (pd, upage);
-    pagedir_add_spte (pd, upage, spte);
-    printf ("SPT EVICT COMPLETE\n");
+    // printf ("SPT: Writing UPAGE %p to SPT is currently %p\n", spte->upage, pagedir_get_page (pd, spte->upage));
+    pagedir_null_page (pd, spte->upage);
+    pagedir_add_spte (pd, spte->upage, spte);
+    // printf ("SPT EVICT COMPLETE\n");
 }
 
 /* Removes PG_CNT consecutive mmaped user virtual pages from the current 

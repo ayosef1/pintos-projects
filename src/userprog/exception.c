@@ -136,7 +136,6 @@ page_fault (struct intr_frame *f)
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
   void *fault_upage; /* Fault page. */
-  void *stack_ptr;         /* Saved esp. */
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
@@ -159,15 +158,17 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
   fault_upage = pg_round_down (fault_addr);
+
+//   printf("PAGE_FAULT on fault_addr: %p. fault_page: %p\n", fault_addr, fault_upage);
   
    if (is_user_vaddr (fault_addr))
    {
-      stack_ptr = user ? f->esp : thread_current ()->saved_user_esp;
       if (not_present)
       {
-         if (spt_try_load_upage (fault_upage))
+         // printf("PAGE_FAULT ABOUT TO CALL SPT_TRY_LOAD_UPAGE\n");
+         if (spt_try_load_upage (fault_upage, thread_current ()->in_syscall))
             return;
-
+         // printf("PAGE_FAULT ABOUT TO CALL SPT_TRY_GROW_STACK\n");
          if (try_grow_stack (f, fault_addr, fault_upage, user))
             return;
       }

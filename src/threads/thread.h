@@ -228,5 +228,6 @@ int thread_max_waiting_priority (struct thread *);
 bool thread_compare_priority (const struct list_elem *a,
                           const struct list_elem *b,
                           void *aux UNUSED);
-
+void thread_update_next_fd (struct thread *t);
+void thread_close_fd (struct thread *t, int fd);
 #endif /* threads/thread.h */

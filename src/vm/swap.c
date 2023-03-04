@@ -1,5 +1,6 @@
 #include <bitmap.h>
 #include "devices/block.h"
+#include "filesys/off_t.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "vm/swap.h"
@@ -21,55 +22,54 @@ swap_init (void)
 }
 
 bool
-swap_try_read (size_t start_id, void *upage)
+swap_try_read (size_t start_id, uint8_t *kpage)
 {
     bool ret = true;
-    printf("SWAP READ ACQUIRED\n");
+    // printf("SWAP READ ACQUIRED\n");
     lock_acquire (&swap_lock);
-    for (size_t id = start_id; id < start_id + SECTORS_PER_SLOT; id++)
+    for (off_t ofs = 0; ofs < SECTORS_PER_SLOT; ofs++)
         {
-            if (!bitmap_test (used_map, start_id))
+            if (!bitmap_test (used_map, start_id + ofs))
                 {
                     ret = false;
                     break;
                 }
-            block_read (swap_block, id, upage + id * SECTORS_PER_SLOT);
-            bitmap_reset (used_map, id);
+            block_read (swap_block, start_id, kpage + ofs * BLOCK_SECTOR_SIZE);
+            bitmap_reset (used_map, start_id + ofs);
         }
-    printf("SWAP READ RELEASED\n");
+    // printf("SWAP READ RELEASED %d\n", ret);
     lock_release (&swap_lock);
     return ret;
 }
 
 size_t
-swap_write (void *upage)
+swap_write (uint8_t *kpage)
 {
-    printf("SWAP WRITE ACQUIRED\n");
+    // printf("SWAP WRITE ACQUIRED\n");
     lock_acquire (&swap_lock);
     size_t start_id = bitmap_scan_and_flip (used_map, 0, SECTORS_PER_SLOT,
                                             false);
-    
     if (start_id == BITMAP_ERROR)
         PANIC ("Swap is full");
 
-    for (block_sector_t id = start_id; id < start_id + SECTORS_PER_SLOT; id++)
+    for (off_t ofs = 0; ofs < SECTORS_PER_SLOT; ofs++)
         {
-            block_write (swap_block, id, upage + id * SECTORS_PER_SLOT);
+            block_write (swap_block, start_id, kpage + ofs * BLOCK_SECTOR_SIZE);
         }
     lock_release (&swap_lock);
-    printf("SWAP WRITE RELEASE\n");
+    // printf("SWAP WRITE RELEASE\n");
     return start_id;
 }
 
 void 
 swap_free (size_t start_id)
 {
-    printf("SWAP LOCK ACQUIRED\n");
+    // printf("SWAP LOCK ACQUIRED\n");
     lock_acquire (&swap_lock);
     for (size_t id = start_id; id < start_id + SECTORS_PER_SLOT; id++)
         {
             bitmap_reset (used_map, id);
         }
     lock_release (&swap_lock);
-    printf("SWAP LOCK RELEASE\n");
+    // printf("SWAP LOCK RELEASE\n");
 }
