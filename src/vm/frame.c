@@ -158,7 +158,7 @@ frame_free_page (void *kpage, bool lock_held)
     palloc_free_page (kpage);
 }
 
-/* Removes the frame table entry that corresponds whose physical address 
+/* Removes the frame table entry whose physical address 
    corresponds to the kernel virtual page KPAGE from the frame table and
    frees the associated memory. Returns true if the entry was removed and
    false if the entry could not be found in the table. */
@@ -188,7 +188,7 @@ struct fte *
 frame_lookup (uint8_t *kpage)
 {
     ASSERT (user_kpage_base <= kpage);
-    off_t table_ofs = ((kpage - user_kpage_base) / PGSIZE);
+    off_t table_ofs = (kpage - user_kpage_base) / PGSIZE;
     return frame_table_base + table_ofs;
 }
 

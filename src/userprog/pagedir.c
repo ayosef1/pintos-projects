@@ -51,7 +51,7 @@ pagedir_destroy (uint32_t *pd)
           else if (*pte != 0)
             free ((struct spte *)*pte);
 #else
-          if (*pte &PTE_P)
+          if (*pte & PTE_P)
             palloc_free_page (pte_get_page (*pte));
         palloc_free_page (pt);
 #endif
@@ -130,7 +130,7 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
     return false;
 }
 
-/* Because SPTE is page alligend, as all addresses, the PRESENT
+/* Because SPTE is page aligned, as all addresses, the PRESENT
    bit will never be set so we can do this and it will return. */
 bool
 pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte)

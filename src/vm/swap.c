@@ -34,7 +34,7 @@ swap_try_read (size_t start_id, uint8_t *kpage)
                     ret = false;
                     break;
                 }
-            block_read (swap_block, start_id, kpage + ofs * BLOCK_SECTOR_SIZE);
+            block_read (swap_block, start_id + ofs, kpage + ofs * BLOCK_SECTOR_SIZE);
             bitmap_reset (used_map, start_id + ofs);
         }
     // printf("SWAP READ RELEASED %d\n", ret);
@@ -54,7 +54,7 @@ swap_write (uint8_t *kpage)
 
     for (off_t ofs = 0; ofs < SECTORS_PER_SLOT; ofs++)
         {
-            block_write (swap_block, start_id, kpage + ofs * BLOCK_SECTOR_SIZE);
+            block_write (swap_block, start_id + ofs, kpage + ofs * BLOCK_SECTOR_SIZE);
         }
     lock_release (&swap_lock);
     // printf("SWAP WRITE RELEASE\n");
@@ -66,10 +66,7 @@ swap_free (size_t start_id)
 {
     // printf("SWAP LOCK ACQUIRED\n");
     lock_acquire (&swap_lock);
-    for (size_t id = start_id; id < start_id + SECTORS_PER_SLOT; id++)
-        {
-            bitmap_reset (used_map, id);
-        }
+    bitmap_set_multiple (used_map, start_id, SECTORS_PER_SLOT - 1, false) ;
     lock_release (&swap_lock);
     // printf("SWAP LOCK RELEASE\n");
 }
