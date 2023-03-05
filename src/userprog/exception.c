@@ -171,17 +171,15 @@ page_fault (struct intr_frame *f)
    }
    if (!user)
       kernel_page_fault (f);
-   #ifdef USERPROG
-      if (thread_current ()->in_syscall)
-         return;
-   #endif
-
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
+   else 
+   {
+      printf ("Page fault at %p: %s error %s page in %s context.\n",
           fault_addr,
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  kill (f);
+      kill (f);
+   }
 }
 
 static bool
@@ -199,18 +197,19 @@ try_grow_stack (struct intr_frame *f, void *fault_addr,
 }
 
 /* Check if access is within 32 bytes of stack pointer*/
- static bool
- valid_stack_growth (void* esp, void *fault_addr)
- {
-     if (fault_addr < (esp - 32) || fault_addr == NULL || 
-         pg_round_down (fault_addr) < PHYS_BASE - MAX_STACK_SIZE) {
-       return false;
-     }
-     return true;
- }
+static bool
+valid_stack_growth (void* esp, void *fault_addr)
+{
+   bool push = fault_addr == esp - 4;
+   bool pusha = fault_addr == esp - 32;
+   bool sub_then_mov = fault_addr >= esp;
+   bool valid_user_vaddr = is_user_vaddr (fault_addr) && fault_addr != NULL;
+   bool within_max_stack = esp - PGSIZE >= PHYS_BASE - MAX_STACK_SIZE;
+   return (push || pusha || sub_then_mov) && valid_user_vaddr && within_max_stack;
+}
 
- static void
- kernel_page_fault (struct intr_frame *f)
+static void
+kernel_page_fault (struct intr_frame *f)
 {
    f->eip = (void *)f->eax;
    f->eax = 0xffffffff;

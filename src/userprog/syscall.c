@@ -65,8 +65,7 @@ static void
 syscall_handler (struct intr_frame *f) 
 {
   uint32_t syscall_num;
-  
-  thread_current ()->in_syscall = true;
+
   #ifdef VM
     thread_current ()->saved_esp = f->esp;
   #endif
@@ -127,9 +126,6 @@ syscall_handler (struct intr_frame *f)
     default:
       exit (SYSCALL_ERROR);
   }
-  #ifdef VM
-    thread_current ()->in_syscall = false;
-  #endif
 }
 
 void

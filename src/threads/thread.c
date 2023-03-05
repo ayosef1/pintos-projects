@@ -628,8 +628,6 @@ init_thread (struct thread *t, const char *name, int priority)
     t->next_fd = EXEC_FD + 1;
   
     list_init (&t->children);
-
-    t->in_syscall = false;
   #endif
 
   #ifdef VM

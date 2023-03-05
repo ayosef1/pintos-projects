@@ -26,18 +26,18 @@ swap_init (void)
 bool
 swap_try_read (size_t start_id, uint8_t *kpage)
 {
-    bool ret = true;
+    bool ret;
     lock_acquire (&swap_lock);
-    for (off_t ofs = 0; ofs < SECTORS_PER_SLOT; ofs++)
-        {
-            if (!bitmap_test (used_map, start_id + ofs))
-                {
-                    ret = false;
-                    break;
-                }
-            block_read (swap_block, start_id + ofs, kpage + ofs * BLOCK_SECTOR_SIZE);
-            bitmap_reset (used_map, start_id + ofs);
-        }
+    ret = bitmap_all (used_map, start_id, SECTORS_PER_SLOT);
+    if (ret)
+    {
+        for (off_t ofs = 0; ofs < SECTORS_PER_SLOT; ofs++)
+            {
+                block_read (swap_block, start_id + ofs, kpage + ofs * 
+                            BLOCK_SECTOR_SIZE);
+                bitmap_reset (used_map, start_id + ofs);
+            }        
+    }
     lock_release (&swap_lock);
     return ret;
 }
@@ -52,11 +52,9 @@ swap_write (uint8_t *kpage)
                                             false);
     if (start_id == BITMAP_ERROR)
         PANIC ("Swap is full");
-
     for (off_t ofs = 0; ofs < SECTORS_PER_SLOT; ofs++)
-        {
-            block_write (swap_block, start_id + ofs, kpage + ofs * BLOCK_SECTOR_SIZE);
-        }
+        block_write (swap_block, start_id + ofs, kpage + ofs * 
+                        BLOCK_SECTOR_SIZE);
     lock_release (&swap_lock);
     return start_id;
 }
@@ -70,3 +68,4 @@ swap_free (size_t start_id)
     bitmap_set_multiple (used_map, start_id, SECTORS_PER_SLOT - 1, false) ;
     lock_release (&swap_lock);
 }
+

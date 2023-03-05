@@ -66,7 +66,8 @@ mmap_find (mapid_t mapid)
 unsigned
 mmap_hash (const struct hash_elem *m_, void *aux UNUSED)
 {
-  const struct mmap_table_entry *m = hash_entry (m_, struct mmap_table_entry, hash_elem);
+  const struct mmap_table_entry *m = hash_entry (m_, struct mmap_table_entry, 
+                                                  hash_elem);
   return hash_int ((unsigned)m->mapid);
 }
 
