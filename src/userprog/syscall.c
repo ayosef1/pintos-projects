@@ -442,10 +442,7 @@ sys_mmap (uint32_t *esp)
   for (int pg = 0; pg < pg_cnt; pg++ )
     {
       /* Check not already mapped. */
-      /* TODO: Change this to pagedir_get_spt when implemented
-         correctly. */
       if (pagedir_get_spte (cur->pagedir, addr, false) != NULL)
-        /* Should you release the lock? */
         goto done;
     }
 

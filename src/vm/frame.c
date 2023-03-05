@@ -43,8 +43,7 @@ frame_table_create (void)
     memset (frame_table_base, 0, frame_table_size);
     if (frame_table_base == NULL)
         PANIC ("Can't allocate for frame table.");
-    printf ("%zu frames available in frame table of size %zu.\n", num_frames,
-            frame_table_size);
+
     /* Initialize each lock. */
     struct fte * fte;
     for (fte = frame_table_base; fte < frame_table_base + num_frames; fte++)
@@ -77,7 +76,6 @@ frame_get_page (bool zeroed)
     kpage = palloc_get_page (PAL_USER | (zeroed ? PAL_ZERO : 0));
     if (kpage == NULL)
         {   
-            // printf("Frame Table is full. About to Evict\n");
             kpage = evict (zeroed);
         }
     return kpage;
@@ -99,7 +97,7 @@ frame_get_spte (void * kpage, bool hold_lock)
     return spte;
 }
 
-/* Eviction algorithm that implements the */
+/* Eviction algorithm that implements the clock algorithm */
 static void *
 evict (bool zeroed)
 {   
@@ -112,6 +110,10 @@ evict (bool zeroed)
             }
             else if (!clock_hand->pinned)
                 {
+                    /* If the page directory entry for the clock hand has been 
+                        accessed, reset the accessed bit and continue iterating 
+                        through the clock algorithm. This implements the second
+                        chance replacement. */
                     if (pagedir_is_accessed (clock_hand->pd, clock_hand->upage))
                     {
                         pagedir_set_accessed (clock_hand->pd, clock_hand->upage,
@@ -120,7 +122,9 @@ evict (bool zeroed)
                         tick_clock_hand ();
                         continue;
                     }
-                    // printf("EVICT FOUND UPAGE TO REMOVE: %p\n", clock_hand->upage);
+
+                    /* Pagedir entry has not been accessed, evict and return 
+                        the newly evicted frame. */
                     void *kpage = user_kpage_base + 
                                   ((clock_hand - frame_table_base) * PGSIZE);
                     spt_evict_kpage (kpage, clock_hand->pd, clock_hand->spte);
@@ -132,7 +136,6 @@ evict (bool zeroed)
                     if (zeroed)
                         memset (kpage, 0, PGSIZE);
                     
-                    // printf("Successsfully evicted. Frame to return %p\n", kpage);
                     return kpage;
                 }
             lock_release (&clock_hand->lock);
@@ -140,6 +143,9 @@ evict (bool zeroed)
         }
 }
 
+/* Advances the clock hand to the next frame in the frame table.
+    If the current clock hand position is the last frame in the frame table,
+    the function wraps around to the first frame in the table. */
 void
 tick_clock_hand (void)
 {
@@ -201,7 +207,7 @@ frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte,
 
     struct fte *fte = frame_lookup (kpage);
     lock_acquire (&fte->lock);
-    ASSERT (fte->pinned)
+    ASSERT (fte->pinned);
     /* Don't need a lock here because no one accessing this data yet since
        it is pinned. */
     fte->upage = upage;
@@ -212,6 +218,7 @@ frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte,
     lock_release (&fte->lock);
 }
 
+/* Set or unset the "pinned" status of a frame. */
 void
 frame_set_pin (void *upage, uint32_t *pd, bool pin)
 {

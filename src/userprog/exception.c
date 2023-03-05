@@ -158,17 +158,13 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
   fault_upage = pg_round_down (fault_addr);
-
-//   printf("PAGE_FAULT on fault_addr: %p. fault_page: %p\n", fault_addr, fault_upage);
   
    if (is_user_vaddr (fault_addr))
    {
       if (not_present)
       {
-         // printf("PAGE_FAULT ABOUT TO CALL SPT_TRY_LOAD_UPAGE\n");
          if (spt_try_load_upage (fault_upage, false))
             return;
-         // printf("PAGE_FAULT ABOUT TO CALL SPT_TRY_GROW_STACK\n");
          if (try_grow_stack (f, fault_addr, fault_upage, user))
             return;
       }

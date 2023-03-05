@@ -142,7 +142,6 @@ spt_try_load_upage (void *upage, bool keep_pinned)
 
     spte = pagedir_get_spte (pd, upage, hold_frame_lock);
     if (spte == NULL)
-        /* We acquire a lock here if in memory. Should we check this? */
         return false;
     
     void *kpage = frame_get_page (NOT_ZEROED);
@@ -155,13 +154,11 @@ spt_try_load_upage (void *upage, bool keep_pinned)
     /* Assuming it is a page now. */
     if (spte->filesys_page)
         {
-            // printf ("Reading UPAGE %p from FILESYS\n", upage);
             if (!install_file (kpage, &disk_info.filesys_info))
                 goto fail;
         }
     else
         {
-            // printf ("Reading UPAGE %p from SWAP sector %zu \n", upage, disk_info.swap_id);
             if (!swap_try_read (disk_info.swap_id, kpage))
                 goto fail;
         }
@@ -182,18 +179,15 @@ spt_try_load_upage (void *upage, bool keep_pinned)
         return false;
 }
 
+/* Evicts a physical frame pointed to by kpage and stores it in the file system, 
+swap space, or neither if it is an executable that hasn't been written to. */
 void
 spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
 {
-     /*
-     Determine what to do based on the spte.
-     EXEC && WRITABLE && IS_DIRTY
-     */
     switch (spte->type)
         {
         case (MMAP):
             /* Only need to write if MMAP is written. */
-            // printf("MMAP\n");
             if (pagedir_is_dirty(pd, spte->upage))
                 {
                     /* Write back to memory. */
@@ -204,25 +198,18 @@ spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
                 }
             break;
         case (EXEC):
-            // printf("EXEC\n");
             /* If an executable page has never been written to, do nothing.
                Otherwise write to swap. */
             if (spte->filesys_page && (!spte->disk_info.filesys_info.writable ||
                 !pagedir_is_dirty(pd, spte->upage)))
                 break;
         default:
-            // printf("SWAP\n");
             spte->filesys_page = false; 
             spte->disk_info.swap_id = swap_write (kpage);
-            // printf ("EVICT: Writing to swap %zu\n", spte->disk_info.swap_id);
             break;
         }
-        /* Need this to be atomic somehow. No other thread
-        will acces but how make atomic with. The owner of the table?*/
-    // printf ("SPT: Writing UPAGE %p to SPT is currently %p\n", spte->upage, pagedir_get_page (pd, spte->upage));
     pagedir_null_page (pd, spte->upage);
     pagedir_add_spte (pd, spte->upage, spte);
-    // printf ("SPT EVICT COMPLETE\n");
 }
 
 /* Removes PG_CNT consecutive mmaped user virtual pages from the current 
@@ -246,9 +233,6 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
                 {
                     if (pagedir_is_dirty (pd, cur_upage))
                         {
-                            /* Here would get the kpage from get_page in
-                               order to synchronize with other evicting
-                               threads. */
                             lock_acquire (&filesys_lock);
                             file_write_at (spte->disk_info.filesys_info.file,
                                            cur_upage, PGSIZE,
@@ -258,26 +242,27 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
                     frame_free_page (pagedir_get_page (pd, cur_upage),
                                      hold_frame_lock);
                 }
-            /* Should this not get rid of it. Unless it is in memory still. */
             pagedir_null_page (pd, cur_upage);        
         }
 }
+
+/* Install file content to kernel page. If the previously installed filesystem 
+    information incdicates bytes to read is 0, the kernel page will be zeroed 
+    out. Otherwise, the content of the file  specified in filesys_info will be 
+    read into the kernel page. */
 static bool
 install_file (void *kpage, struct filesys_info *filesys_info)
 {
     if (filesys_info->page_read_bytes == 0)
         {
-            // printf ("Install File: all zeros for kpage %p\n", kpage);
             memset (kpage, 0, PGSIZE);
         }
 
     else
         {
-            /* Don't have locking here because from a page fault we will
-               already have the lock */
+            /* Locking not neccesary here because we will have lock from 
+                page fault. */
             size_t page_zero_bytes;
-            // printf ("Install File: Reading from file %p for kpage %p\n",
-            //         filesys_info->file, kpage);
             memset (kpage, 0, PGSIZE);
             int bytes_read = file_read_at (filesys_info->file, kpage, 
                                            filesys_info->page_read_bytes,

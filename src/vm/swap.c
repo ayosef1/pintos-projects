@@ -13,6 +13,7 @@ struct bitmap *used_map;
 /* Block device interface. */
 struct block * swap_block;
 
+/* Initializes Swap Table to allow for swapping. */
 void
 swap_init (void)
 {
@@ -21,11 +22,11 @@ swap_init (void)
     used_map = bitmap_create (block_size (swap_block));
 }
 
+/* Tries to read a swap slot from the swap block. */
 bool
 swap_try_read (size_t start_id, uint8_t *kpage)
 {
     bool ret = true;
-    // printf("SWAP READ ACQUIRED\n");
     lock_acquire (&swap_lock);
     for (off_t ofs = 0; ofs < SECTORS_PER_SLOT; ofs++)
         {
@@ -37,15 +38,15 @@ swap_try_read (size_t start_id, uint8_t *kpage)
             block_read (swap_block, start_id + ofs, kpage + ofs * BLOCK_SECTOR_SIZE);
             bitmap_reset (used_map, start_id + ofs);
         }
-    // printf("SWAP READ RELEASED %d\n", ret);
     lock_release (&swap_lock);
     return ret;
 }
 
+/* Writes the contents of the given kernel page to swap block and returns
+    the index of the first sector in the swap block that was written to. */
 size_t
 swap_write (uint8_t *kpage)
 {
-    // printf("SWAP WRITE ACQUIRED\n");
     lock_acquire (&swap_lock);
     size_t start_id = bitmap_scan_and_flip (used_map, 0, SECTORS_PER_SLOT,
                                             false);
@@ -57,16 +58,15 @@ swap_write (uint8_t *kpage)
             block_write (swap_block, start_id + ofs, kpage + ofs * BLOCK_SECTOR_SIZE);
         }
     lock_release (&swap_lock);
-    // printf("SWAP WRITE RELEASE\n");
     return start_id;
 }
 
+/* Frees the sectors in swap space previously allocated
+    for the given start_id and the consecutive SECTORS_PER_SLOT sectors. */
 void 
 swap_free (size_t start_id)
 {
-    // printf("SWAP LOCK ACQUIRED\n");
     lock_acquire (&swap_lock);
     bitmap_set_multiple (used_map, start_id, SECTORS_PER_SLOT - 1, false) ;
     lock_release (&swap_lock);
-    // printf("SWAP LOCK RELEASE\n");
 }
