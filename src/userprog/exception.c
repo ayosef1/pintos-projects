@@ -197,7 +197,10 @@ try_grow_stack (struct intr_frame *f, void *fault_addr,
    return false;
 }
 
-/* Check if access is within 32 bytes of stack pointer*/
+/* Check if fauling address FAULT_ADDR indicates an valid stack access due to 
+   PUSH, PUSHA, or any address in user virtual memory above the current stack 
+   pointer. Returns true in any of these cases given fault_addr and esp are 
+   valid, and false otherwise. */
 static bool
 valid_stack_growth (void* esp, void *fault_addr)
 {
@@ -205,9 +208,13 @@ valid_stack_growth (void* esp, void *fault_addr)
    bool pusha = fault_addr == esp - 32;
    bool sub_then_mov = fault_addr >= esp;
 
-   bool valid_user_vaddr = is_user_vaddr (fault_addr) && fault_addr != NULL;
+   /* Stack growths are caused by push, pusha, or subtracting esp. */
+   if (!push && !pusha && !sub_then_mov)
+      return false;
+   
+   void *stck_bottom = fault_addr < esp ? fault_addr : esp;
+   bool within_max_stack = stck_bottom - PGSIZE >= PHYS_BASE - MAX_STACK_SIZE;
+   bool valid_stack_pointer = is_user_vaddr (esp) && esp != NULL;
 
-   (void *)bottom_of_stack = fault_addr < esp : fault_addr : esp;
-   bool within_max_stack = bottom_of_stack - PGSIZE >= PHYS_BASE - MAX_STACK_SIZE
-   return (push || pusha || sub_then_mov) && valid_user_vaddr && within_max_stack;
+   return within_max_stack && valid_stack_pointer && fault_addr != NULL;
 }

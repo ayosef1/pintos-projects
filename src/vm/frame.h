@@ -19,10 +19,9 @@
 
    The `pinned` member is for use by the eviction algorithm, if a frame is
    pinned it is not considered for eviction.
-   `tid` represents the thread that currently owns the frame. It is used
-   during eviction to get access to a the frame owner's page directory and
-   supplementary page table and `upage` is the key to both of these table.
-   `hash_elem` is the element in the frame table. */
+   Because our frame table is preallocated, we map each kernel virtual addresses
+   to a specific entry in our table. Furthermore, the fte lock allows for fine
+   grain locking since it is per a frame table entry. */
 struct fte
     {
         void *upage;                    /* User Virtual Address of associated
@@ -31,7 +30,7 @@ struct fte
         struct spte *spte;              /* Supplementary page table entry
                                            of owner. */
         bool pinned;                    /* If the frame can be evicted. */
-        struct lock lock;
+        struct lock lock;               /* Lock for access to frame entry */
     };
 
 void frame_table_init (uint8_t *user_pool_base, size_t user_pages);
