@@ -55,7 +55,11 @@ spt_try_add_upage (void *upage, enum page_type type, bool in_memory,
 
 /* Attempt to add a stack page with user virtual page UPAGE to the 
    supplementary page table and adding a mapping to the current 
-   thread's page table from UPAGE to kernel virtual page KPAGE. */
+   thread's page table from UPAGE to kernel virtual page KPAGE.
+   
+   Returns true if the frame is allocated, an SPTE is set up for
+   this page and the mapping from UPAGE to KPAGE is generated. 
+   Otherwise, returns false. */
 bool
 spt_try_add_stack_page (void *upage)
 {
@@ -123,7 +127,11 @@ spt_try_add_mmap_pages (void *begin_upage, struct file *fp, int pg_cnt,
 }
 
 
-/* Loading the current thread's virtual page UPAGE into the frame KPAGE */
+/* Loading the current thread's virtual page UPAGE into the frame KPAGE
+
+    Returns true if the frame is allocated, an SPTE is set up for
+    this page and the mapping from UPAGE to KPAGE is generated. 
+    Otherwise, returns false. */
 bool
 spt_try_load_upage (void *upage, bool keep_pinned)
 {
@@ -179,8 +187,10 @@ spt_try_load_upage (void *upage, bool keep_pinned)
         return false;
 }
 
-/* Evicts a physical frame pointed to by kpage and stores it in the file system, 
-swap space, or neither if it is an executable that hasn't been written to. */
+/* Evicts a physical frame pointed to by KPAGE. Uses the page directory PD
+    to stores it in the file system, swap space, or neither if it is an 
+    executable that hasn't been written to. Clears upage stored in SPTE from 
+    the page directory. */
 void
 spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
 {
@@ -212,7 +222,7 @@ spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
     pagedir_clear_page(pd, spte->upage);
 }
 
-/* Removes PG_CNT consecutive mmaped user virtual pages from the current 
+/* Removes NUM_PAGES consecutive mmaped user virtual pages from the current 
    thread's supplementary page table starting from BEGIN_UPAGE. This is used
    on process exit, failed mmap calls and munmap. */
 void
@@ -246,10 +256,13 @@ spt_remove_mmap_pages (void * begin_upage, int num_pages)
         }
 }
 
-/* Install file content to kernel page. If the previously installed filesystem 
-    information incdicates bytes to read is 0, the kernel page will be zeroed 
-    out. Otherwise, the content of the file  specified in filesys_info will be 
-    read into the kernel page. */
+/* Install file content to kernel page KPAGE. If the previously installed 
+    filesystem information incdicates bytes to read is 0, the kernel page 
+    will be zeroed out. Otherwise, the content of the file specified in 
+    FILESYS_INFO will be read into the kernel page. 
+    
+    Returns false if the number of bytes read doesn't equal the number of bytes
+    specified in FILESYS_INFO, else true. */
 static bool
 install_file (void *kpage, struct filesys_info *filesys_info)
 {

@@ -27,6 +27,8 @@ void tick_clock_hand (void);
 static void clear_frame (void * vaddr, bool lock_held);
 static struct fte *frame_lookup (uint8_t *kpage);
 
+/* Initializes Frame Table to have NUM_USER_PAGES frames allocated from the 
+    USER_POOL_BASE to allow for paging. */
 void
 frame_table_init (uint8_t *user_pool_base, size_t num_user_pages)
 {
@@ -34,7 +36,8 @@ frame_table_init (uint8_t *user_pool_base, size_t num_user_pages)
     user_kpage_base = user_pool_base;
 }
 
-/* Initializes Frame Table to allow for paging. */
+/* Creates Frame Table to allow for paging. Sets the frame to pinned to 
+    avoid eviction. */
 void
 frame_table_create (void)
 {
@@ -66,7 +69,8 @@ void frame_table_destroy (void)
 
 /* Returns a new frame for the user process. It first tries to acquire a
    new frame from the user pool. If there are none left it acquires it
-   by evicting using the clock algorithm */
+   by evicting using the clock algorithm. Returns an address to a physical 
+   frame containing ZEROED? bytes. */
 void *
 frame_get_page (bool zeroed)
 {
@@ -81,6 +85,9 @@ frame_get_page (bool zeroed)
     return kpage;
 }
 
+/* Returns the spte currently mapped to the frame KPAGE. Maintains the lock 
+    in the frame struck if specified to do so by HOLD_LOCK. Returns null if
+    no such spte exists. */
 struct spte *
 frame_get_spte (void * kpage, bool hold_lock)
 {
@@ -97,7 +104,9 @@ frame_get_spte (void * kpage, bool hold_lock)
     return spte;
 }
 
-/* Eviction algorithm that implements the clock algorithm */
+/* Implements the clock algorithm that approximates LRU for  eviction of frames. 
+    Gives each unpinned, mapped frame a second chance before being evicted. 
+    Returns pointer to physical frame with the bytes ZEROED? */
 static void *
 evict (bool zeroed)
 {   
@@ -156,7 +165,7 @@ tick_clock_hand (void)
 }
 
 /* Frees the physical frame associated with kernel virtual page KPAGE
-   and all associated memory. */
+   and passes through LOCK_HELD boolean to clear_frame. */
 void
 frame_free_page (void *kpage, bool lock_held)
 {
@@ -166,8 +175,9 @@ frame_free_page (void *kpage, bool lock_held)
 
 /* Removes the frame table entry whose physical address 
    corresponds to the kernel virtual page KPAGE from the frame table and
-   frees the associated memory. Returns true if the entry was removed and
-   false if the entry could not be found in the table. */
+   frees the associated memory. Acquires lock on fte if LOCK_HELD is false. 
+   Returns true if the entry was removed and false if the entry could not be 
+   found in the table. */
 static void
 clear_frame (void * kpage, bool lock_held)
 {
@@ -218,7 +228,8 @@ frame_set_udata (void *kpage, void *upage, uint32_t *pd, struct spte *spte,
     lock_release (&fte->lock);
 }
 
-/* Set or unset the "pinned" status of a frame. */
+/* Set the pinned status to PIN of the frame pointed to by UPAGE. Uses the page 
+    directory PD to scan the mapping. Returns if no such page or fte exists. */
 void
 frame_set_pin (void *upage, uint32_t *pd, bool pin)
 {

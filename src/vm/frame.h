@@ -31,7 +31,7 @@ struct fte
         struct spte *spte;              /* Supplementary page table entry
                                            of owner. */
         bool pinned;                    /* If the frame can be evicted. */
-        struct lock lock;
+        struct lock lock;               /* Lock for access to frame entry */
     };
 
 void frame_table_init (uint8_t *user_pool_base, size_t user_pages);
