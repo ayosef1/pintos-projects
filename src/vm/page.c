@@ -184,6 +184,8 @@ swap space, or neither if it is an executable that hasn't been written to. */
 void
 spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
 {
+    /* Invalidate upage -> kpage mapping */
+    pagedir_clear_page(pd, spte->upage);
     switch (spte->type)
         {
         case (MMAP):
@@ -208,7 +210,6 @@ spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
             spte->disk_info.swap_id = swap_write (kpage);
             break;
         }
-    pagedir_null_page (pd, spte->upage);
     pagedir_add_spte (pd, spte->upage, spte);
 }
 
