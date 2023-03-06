@@ -18,7 +18,6 @@ static void page_fault (struct intr_frame *);
 static bool try_grow_stack (struct intr_frame *f, void * fault_addr,
                             void *fault_upage, bool user);
 static bool valid_stack_growth (void* esp, void *fault_addr);
-static void kernel_page_fault (struct intr_frame *f);
 
 /* Registers handlers for interrupts that can be caused by user
    programs.
@@ -160,26 +159,28 @@ page_fault (struct intr_frame *f)
   fault_upage = pg_round_down (fault_addr);
   
    if (is_user_vaddr (fault_addr))
-   {
-      if (not_present)
       {
-         if (spt_try_load_upage (fault_upage, false))
-            return;
-         if (try_grow_stack (f, fault_addr, fault_upage, user))
-            return;
-      }
-   }
-   if (!user)
-      kernel_page_fault (f);
-   else 
-   {
-      printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-      kill (f);
-   }
+         if (not_present)
+         {
+            if (spt_try_load_upage (fault_upage, false))
+               return;
+            if (try_grow_stack (f, fault_addr, fault_upage, user))
+               return;
+         }
+      } 
+   if (!user) 
+      {
+         f->eip = (void *)f->eax;
+         f->eax = 0xffffffff;
+         return;
+      }  
+  
+   printf ("Page fault at %p: %s error %s page in %s context.\n",
+         fault_addr,
+         not_present ? "not present" : "rights violation",
+         write ? "writing" : "reading",
+         user ? "user" : "kernel");
+   kill (f);
 }
 
 static bool
@@ -206,11 +207,4 @@ valid_stack_growth (void* esp, void *fault_addr)
    bool valid_user_vaddr = is_user_vaddr (fault_addr) && fault_addr != NULL;
    bool within_max_stack = esp - PGSIZE >= PHYS_BASE - MAX_STACK_SIZE;
    return (push || pusha || sub_then_mov) && valid_user_vaddr && within_max_stack;
-}
-
-static void
-kernel_page_fault (struct intr_frame *f)
-{
-   f->eip = (void *)f->eax;
-   f->eax = 0xffffffff;
 }
