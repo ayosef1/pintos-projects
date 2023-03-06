@@ -23,7 +23,7 @@ struct lock eviction_lock;
 struct fte *clock_hand;
 
 static void *evict (bool zeroed);
-void tick_clock_hand (void);
+static void tick_clock_hand (void);
 static void clear_frame (void * vaddr, bool lock_held);
 static struct fte *frame_lookup (uint8_t *kpage);
 
@@ -82,7 +82,7 @@ frame_get_page (bool zeroed)
 }
 
 struct spte *
-frame_get_spte (void *kpage, void *upage, bool hold_lock)
+frame_get_spte (void *kpage, const void *upage, bool hold_lock)
 {
     struct spte * spte;
     struct fte *fte = frame_lookup (kpage);
@@ -106,8 +106,11 @@ frame_get_spte (void *kpage, void *upage, bool hold_lock)
 static void *
 evict (bool zeroed)
 {   
+    int i = 0;
+    int max_iterations = 2 * num_frames;
+
     lock_acquire (&eviction_lock);
-    while (true)
+    for (i = 0; i < max_iterations; i++)
         {
             if (!lock_try_acquire (&clock_hand->lock))
             {
@@ -146,12 +149,13 @@ evict (bool zeroed)
             lock_release (&clock_hand->lock);
             tick_clock_hand ();
         }
+    return NULL;
 }
 
 /* Advances the clock hand to the next frame in the frame table.
     If the current clock hand position is the last frame in the frame table,
     the function wraps around to the first frame in the table. */
-void
+static void
 tick_clock_hand (void)
 {
     if (clock_hand + 1 == frame_table_end)

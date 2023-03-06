@@ -145,6 +145,8 @@ spt_try_load_upage (void *upage, bool keep_pinned)
         return false;
     
     void *kpage = frame_get_page (NOT_ZEROED);
+    if (kpage == NULL)
+        return false;
 
     bool writable = true;
     if (spte->type == EXEC)
