@@ -275,8 +275,13 @@ sys_read (uint32_t *esp)
 
   fd = get_arg_int (esp, 1);
   size = get_arg_int (esp, 3);
+
+  struct thread *cur = thread_current ();
+  cur->in_sys_rw = true;
+
   buffer = (uint8_t *) get_arg_buffer (esp, 2, size, true);
 
+  cur->in_sys_rw = false;
   if (!is_valid_fd (fd) || fd == STDOUT_FILENO)
     {
       return SYSCALL_ERROR;
@@ -291,7 +296,6 @@ sys_read (uint32_t *esp)
     }
   else
     {
-        struct thread *cur = thread_current ();
         struct file *fp = cur->fdtable[fd];
 
         if (fp == NULL)
@@ -302,6 +306,15 @@ sys_read (uint32_t *esp)
         lock_release (&filesys_lock);
     }
   
+  char *buffer_start = pg_round_down (buffer);
+  size_t num_pages = (size + PGSIZE - 1) / PGSIZE;
+  
+  for (size_t i = 0; i < num_pages; i++) 
+    {
+      char *page_start = buffer_start + i * PGSIZE;
+      frame_set_pin(page_start, cur->pagedir, false);
+    }
+
   return bytes_read;
 }
 
@@ -318,8 +331,13 @@ sys_write (uint32_t *esp)
 
   fd = get_arg_int (esp, 1);
   size = get_arg_int (esp, 3);
+
+  struct thread *cur = thread_current ();
+  cur->in_sys_rw = true;
+
   buffer = get_arg_buffer (esp, 2, size, false);
 
+  cur->in_sys_rw = false; 
   if (!is_valid_fd (fd) || fd == STDIN_FILENO)
     {
       bytes_written = SYSCALL_ERROR;
@@ -338,17 +356,24 @@ sys_write (uint32_t *esp)
     }
   else 
     {
-      struct thread *cur = thread_current ();
       struct file *fp = cur->fdtable[fd];
 
       if (fp == NULL) 
         return SYSCALL_ERROR;
-
       lock_acquire (&filesys_lock);
       bytes_written = file_write(fp, buffer, size);
       lock_release (&filesys_lock);
     }
 
+  char *buffer_start = pg_round_down (buffer);
+  size_t num_pages = (size + PGSIZE - 1) / PGSIZE;
+
+  for (size_t i = 0; i < num_pages; i++) 
+    {
+      char *page_start = buffer_start + i * PGSIZE;
+      frame_set_pin(page_start, cur->pagedir, false);
+    }
+    
   return bytes_written;
 }
 

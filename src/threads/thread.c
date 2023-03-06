@@ -632,6 +632,7 @@ init_thread (struct thread *t, const char *name, int priority)
 
   #ifdef VM
     t->saved_esp = NULL;
+    t->in_sys_rw = false;
   #endif
 
   /* Initialize the list of locks held by current list*/

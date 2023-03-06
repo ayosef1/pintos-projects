@@ -172,6 +172,8 @@ struct thread
    struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
    struct child_exit_info *exit_info;  /* Thread's exit information shared with
                                           parent. */
+   bool in_sys_rw;                     /* Whether or not we are in a read or 
+                                          write system call*/
 #endif
 #ifdef VM
    struct hash mmap_table;             /* Memory map table. */

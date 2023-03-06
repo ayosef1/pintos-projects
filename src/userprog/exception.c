@@ -162,7 +162,7 @@ page_fault (struct intr_frame *f)
       {
          if (not_present)
          {
-            if (spt_try_load_upage (fault_upage, false))
+            if (spt_try_load_upage (fault_upage, thread_current ()->in_sys_rw))
                return;
             if (try_grow_stack (f, fault_addr, fault_upage, user))
                return;
