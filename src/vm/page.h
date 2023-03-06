@@ -76,7 +76,6 @@ struct spte
         bool filesys_page;              /* If stored in filesys. */
         union disk_info disk_info;      /* Info how to read and  write to 
                                            disk */
-        struct hash_elem hash_elem;     /* Page Table hash elem. */
     };
 
 struct spte *spt_try_add_upage (void *upage, enum page_type type, 
@@ -88,7 +87,4 @@ bool spt_try_add_stack_page (void *upage);
 bool spt_try_load_upage (void *upage, bool pinned);
 void spt_remove_mmap_pages (void * begin_upage, int num_pages);
 void spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte);
-unsigned spt_hash (const struct hash_elem *p_, void *aux);
-bool spt_less (const struct hash_elem *a_, const struct hash_elem *b_,
-                void *aux);
 #endif /* vm/page.h */
