@@ -82,7 +82,7 @@ frame_get_page (bool zeroed)
 }
 
 struct spte *
-frame_get_spte (void * kpage, bool hold_lock)
+frame_get_spte (void *kpage, void *upage, bool hold_lock)
 {
     struct spte * spte;
     struct fte *fte = frame_lookup (kpage);
@@ -91,6 +91,11 @@ frame_get_spte (void * kpage, bool hold_lock)
 
     lock_acquire (&fte->lock);
     spte = fte->spte;
+    if (spte->upage != upage)
+    {
+        lock_release (&fte->lock);
+        return pagedir_get_spte (thread_current ()->pagedir, upage, hold_lock);
+    }
     if (!hold_lock)
         lock_release (&fte->lock);
     

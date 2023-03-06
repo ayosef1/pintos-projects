@@ -39,7 +39,7 @@ void frame_table_create (void);
 void frame_table_destroy (void);
 
 void *frame_get_page (bool zeroed);
-struct spte *frame_get_spte (void *kpage, bool hold);
+struct spte *frame_get_spte (void *kpage, void *upage, bool hold);
 void frame_free_page (void *kpage, bool lock_held);
 void frame_set_udata (void *kpage, void *upage, uint32_t *pd,
                       struct spte *spte, bool keep_pinned);

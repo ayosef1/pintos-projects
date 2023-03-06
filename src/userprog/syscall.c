@@ -40,8 +40,8 @@ static int get_arg_int (void *esp, int pos);
 static void *get_arg_ptr (void *esp, int pos);
 
 static bool is_valid_fd (int fd);
-static bool is_valid_read (void *addr, unsigned size, bool pin);
-static bool is_valid_write (void *addr, unsigned size, bool pin);
+static bool is_valid_read (void *addr, unsigned size);
+static bool is_valid_write (void *addr, unsigned size);
 
 static bool can_read_byte (void *uaddr);
 static bool can_write_byte (void *uaddr);
@@ -49,8 +49,7 @@ static bool can_write_byte (void *uaddr);
 static int get_user (const uint8_t *uaddr);
 static bool put_user (uint8_t *udst, uint8_t byte);
 
-static void pin_pages (void *start_page, void *end_page);
-
+static void set_buffer_pin (void *buffer, unsigned size, bool pin);
 
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
 
@@ -70,7 +69,7 @@ syscall_handler (struct intr_frame *f)
     thread_current ()->saved_esp = f->esp;
   #endif
 
-  if (!is_valid_read (f->esp, sizeof (void *), false))
+  if (!is_valid_read (f->esp, sizeof (void *)))
     exit (SYSCALL_ERROR);
 
   syscall_num = get_arg_int (f->esp, 0);
@@ -152,13 +151,16 @@ sys_exit (uint32_t *esp)
 pid_t
 sys_exec (uint32_t *esp)
 {
+  pid_t pid;
   char *cmd_line;
 
   cmd_line = get_arg_string (esp, 1, CMD_LINE_MAX);
   if (cmd_line == NULL)
     return TID_ERROR;
   
-  return process_execute (cmd_line);
+  pid = process_execute (cmd_line);
+  set_buffer_pin (cmd_line, strlen (cmd_line) + 1, false);
+  return pid;
 }
 
 int
@@ -186,6 +188,8 @@ sys_create (uint32_t *esp)
   lock_acquire (&filesys_lock);
   ret = filesys_create (fname, initial_size);
   lock_release (&filesys_lock);
+
+  set_buffer_pin (fname, strlen (fname), false);
   return ret;
 }
 
@@ -202,6 +206,8 @@ sys_remove (uint32_t *esp)
   lock_acquire (&filesys_lock);
   ret = filesys_remove (fname);
   lock_release (&filesys_lock);
+
+  set_buffer_pin (fname, strlen (fname), false);
   return ret;
 }
 
@@ -226,7 +232,10 @@ sys_open (uint32_t *esp)
 
   /* File open unsuccessful. */
   if (fp == NULL)
+  {
+    set_buffer_pin (fname, strlen (fname) + 1, false);
     return SYSCALL_ERROR;
+  }
   
   if (cur->next_fd < 0)
     {
@@ -239,6 +248,7 @@ sys_open (uint32_t *esp)
   cur->fdtable[ret] = fp;
   
   thread_update_next_fd (cur);
+  set_buffer_pin (fname, strlen (fname) + 1, false);
   return ret;
 
 }
@@ -277,11 +287,14 @@ sys_read (uint32_t *esp)
   size = get_arg_int (esp, 3);
 
   struct thread *cur = thread_current ();
+
   cur->in_sys_rw = true;
-
   buffer = (uint8_t *) get_arg_buffer (esp, 2, size, true);
-
   cur->in_sys_rw = false;
+
+  uint8_t *buffer_cpy = buffer;
+  unsigned size_cpy = size;
+  
   if (!is_valid_fd (fd) || fd == STDOUT_FILENO)
     {
       return SYSCALL_ERROR;
@@ -306,14 +319,7 @@ sys_read (uint32_t *esp)
         lock_release (&filesys_lock);
     }
   
-  char *buffer_start = pg_round_down (buffer);
-  size_t num_pages = (size + PGSIZE - 1) / PGSIZE;
-  
-  for (size_t i = 0; i < num_pages; i++) 
-    {
-      char *page_start = buffer_start + i * PGSIZE;
-      frame_set_pin(page_start, cur->pagedir, false);
-    }
+  set_buffer_pin (buffer_cpy, size_cpy, false);
 
   return bytes_read;
 }
@@ -333,11 +339,12 @@ sys_write (uint32_t *esp)
   size = get_arg_int (esp, 3);
 
   struct thread *cur = thread_current ();
+
   cur->in_sys_rw = true;
-
   buffer = get_arg_buffer (esp, 2, size, false);
+  cur->in_sys_rw = false;
 
-  cur->in_sys_rw = false; 
+  char *buffer_cpy = buffer;
   if (!is_valid_fd (fd) || fd == STDIN_FILENO)
     {
       bytes_written = SYSCALL_ERROR;
@@ -364,16 +371,8 @@ sys_write (uint32_t *esp)
       bytes_written = file_write(fp, buffer, size);
       lock_release (&filesys_lock);
     }
-
-  char *buffer_start = pg_round_down (buffer);
-  size_t num_pages = (size + PGSIZE - 1) / PGSIZE;
-
-  for (size_t i = 0; i < num_pages; i++) 
-    {
-      char *page_start = buffer_start + i * PGSIZE;
-      frame_set_pin(page_start, cur->pagedir, false);
-    }
-    
+  
+  set_buffer_pin (buffer_cpy, size, false);
   return bytes_written;
 }
 
@@ -510,7 +509,7 @@ get_arg_int (void *esp, int pos)
 {
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
-  if (!is_valid_read (arg, sizeof (int), false))
+  if (!is_valid_read (arg, sizeof (int)))
     exit (SYSCALL_ERROR);
 
   return *(int *)arg;
@@ -521,7 +520,7 @@ get_arg_ptr (void *esp, int pos)
 {
   uint32_t *arg;
   arg = (uint32_t *)esp + pos;
-  if (!is_valid_read (arg, sizeof (int), false))
+  if (!is_valid_read (arg, sizeof (int)))
     exit (SYSCALL_ERROR);
   
   return *(void**)arg;
@@ -537,11 +536,11 @@ get_arg_buffer (void *esp, int pos, int size, bool write_to_buffer)
   void **arg;
 
   arg = (void **)esp + pos;
-  if (!is_valid_read (arg, sizeof (char *), false))
+  if (!is_valid_read (arg, sizeof (char *)))
     exit (SYSCALL_ERROR);
-  if (write_to_buffer && !is_valid_write (*arg, size, true))
+  if (write_to_buffer && !is_valid_write (*arg, size))
     exit (SYSCALL_ERROR);
-  else if (!is_valid_read (*arg, size, true))
+  else if (!is_valid_read (*arg, size))
     exit (SYSCALL_ERROR);
 
   return *(void **)arg;
@@ -561,7 +560,7 @@ get_arg_string (void *esp, int pos, int limit)
   str_ptr = (char **)esp + pos;
 
   /* Check the bytes of the char * are all in valid memory */
-  if (!is_valid_read (str_ptr, sizeof (char *), false))
+  if (!is_valid_read (str_ptr, sizeof (char *)))
     exit (SYSCALL_ERROR);
 
   end = *str_ptr + limit + 1;
@@ -581,13 +580,13 @@ get_arg_string (void *esp, int pos, int limit)
   if (cur == *str_ptr || cur == end)
     return NULL;
   
-  pin_pages (*str_ptr, pg_round_down (*str_ptr + len + 1));
+  set_buffer_pin (*str_ptr, len + 1, true);
   return *str_ptr;
 }
 
 /* Returns whether size bytes starting at addr are in valid to read from. */
 static bool 
-is_valid_read (void *addr, unsigned size, bool pin)
+is_valid_read (void *addr, unsigned size)
 {
   if (size == 0) return true;
 
@@ -603,14 +602,13 @@ is_valid_read (void *addr, unsigned size, bool pin)
       return false;
     page += PGSIZE;
   }
-  if (pin)
-    pin_pages (start_page, end_page);
+
   return true;
 }
 
 /* Returns whether size bytes starting at addr are in valid to write to. */
 static bool 
-is_valid_write (void *addr, unsigned size, bool pin)
+is_valid_write (void *addr, unsigned size)
 {
   if (size == 0) return true;
 
@@ -626,8 +624,7 @@ is_valid_write (void *addr, unsigned size, bool pin)
       return false;
     page += PGSIZE;
   }
-  if (pin)
-    pin_pages (start_page, end_page);
+
   return true;
 }
 
@@ -679,12 +676,14 @@ put_user (uint8_t *udst, uint8_t byte)
 }
 
 static void
-pin_pages (void *start_page, void *end_page)
+set_buffer_pin (void *buffer, unsigned size, bool pin)
 {
-  void *page = start_page;
-  while (page <= end_page)
-  {
-    frame_set_pin (page, thread_current ()->pagedir, true);
-    page += PGSIZE;
-  }
+  char *buffer_start = pg_round_down (buffer);
+  size_t num_pages = (size + PGSIZE - 1) / PGSIZE;
+  
+  for (size_t i = 0; i < num_pages; i++) 
+    {
+      char *page_start = buffer_start + i * PGSIZE;
+      frame_set_pin (page_start, thread_current ()->pagedir, pin);
+    }
 }

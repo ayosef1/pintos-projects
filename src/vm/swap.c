@@ -65,7 +65,7 @@ void
 swap_free (size_t start_id)
 {
     lock_acquire (&swap_lock);
-    bitmap_set_multiple (used_map, start_id, SECTORS_PER_SLOT - 1, false) ;
+    bitmap_set_multiple (used_map, start_id, SECTORS_PER_SLOT, false) ;
     lock_release (&swap_lock);
 }
 

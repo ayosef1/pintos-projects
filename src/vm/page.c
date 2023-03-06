@@ -184,6 +184,7 @@ swap space, or neither if it is an executable that hasn't been written to. */
 void
 spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
 {
+    pagedir_clear_page(pd, spte->upage);
     switch (spte->type)
         {
         case (MMAP):
@@ -209,7 +210,6 @@ spt_evict_kpage (void *kpage, uint32_t *pd, struct spte *spte)
             break;
         }
     pagedir_add_spte (pd, spte->upage, spte);
-    pagedir_clear_page(pd, spte->upage);
 }
 
 /* Removes PG_CNT consecutive mmaped user virtual pages from the current 

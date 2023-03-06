@@ -146,6 +146,7 @@ pagedir_add_spte (uint32_t *pd, void *upage, struct spte *spte)
   if (pte != NULL) 
     {
       *pte = (uint32_t) spte;
+      invalidate_pagedir (pd);
       return true;
     }
   else
@@ -162,10 +163,10 @@ pagedir_get_spte (uint32_t *pd, const void *uaddr, bool hold_spte)
   pte = lookup_page (pd, uaddr, false);
   if (pte != NULL )
     {
-      if ((*pte & PTE_P) != 0)
+      if ((*pte & (PTE_P | PTE_W)) != 0)
         {
           void * kpage = pte_get_page (*pte) + pg_ofs (uaddr);
-          return frame_get_spte (kpage, hold_spte);
+          return frame_get_spte (kpage, uaddr, hold_spte);
         }
       else
         return *pte == 0 ? NULL : (struct spte *) *pte;
@@ -217,7 +218,7 @@ pagedir_clear_page (uint32_t *pd, void *upage)
   pte = lookup_page (pd, upage, false);
   if (pte != NULL && (*pte & PTE_P) != 0)
     {
-      *pte &= ~PTE_P;
+      *pte &= ~(PTE_P | PTE_W);
       invalidate_pagedir (pd);
     }
 }
