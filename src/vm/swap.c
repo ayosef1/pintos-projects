@@ -13,7 +13,8 @@ struct bitmap *used_map;
 /* Block device interface. */
 struct block * swap_block;
 
-/* Initializes Swap Table to allow for swapping. */
+/* Initializes the swap tables bit map to be the size of the number
+   of sectors in swap. */
 void
 swap_init (void)
 {
@@ -22,7 +23,9 @@ swap_init (void)
     used_map = bitmap_create (block_size (swap_block));
 }
 
-/* Tries to read a swap slot from the swap block. */
+/* Reads a page from swap starting from sector with id START_ID into
+   the frame with kernel virtual address KPAGE. If there is not enough
+   room in swap, returns false, otherwise returns true. */
 bool
 swap_try_read (size_t start_id, uint8_t *kpage)
 {
@@ -42,8 +45,9 @@ swap_try_read (size_t start_id, uint8_t *kpage)
     return ret;
 }
 
-/* Writes the contents of the given kernel page to swap block and returns
-    the index of the first sector in the swap block that was written to. */
+/* Writes the contents of frame at kernel virtual address KPAGE into the next
+   available contiguous page length region of swap. Returns the id of the
+   first sector used to store the page. */
 size_t
 swap_write (uint8_t *kpage)
 {
@@ -60,12 +64,12 @@ swap_write (uint8_t *kpage)
 }
 
 /* Frees the sectors in swap space previously allocated
-    for the given start_id and the consecutive SECTORS_PER_SLOT sectors. */
+    for the given START_ID and the consecutive SECTORS_PER_SLOT sectors. */
 void 
 swap_free (size_t start_id)
 {
     lock_acquire (&swap_lock);
-    bitmap_set_multiple (used_map, start_id, SECTORS_PER_SLOT - 1, false) ;
+    bitmap_set_multiple (used_map, start_id, SECTORS_PER_SLOT, false) ;
     lock_release (&swap_lock);
 }
 
