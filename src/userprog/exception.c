@@ -204,7 +204,10 @@ valid_stack_growth (void* esp, void *fault_addr)
    bool push = fault_addr == esp - 4;
    bool pusha = fault_addr == esp - 32;
    bool sub_then_mov = fault_addr >= esp;
+
    bool valid_user_vaddr = is_user_vaddr (fault_addr) && fault_addr != NULL;
-   bool within_max_stack = esp - PGSIZE >= PHYS_BASE - MAX_STACK_SIZE;
+
+   (void *)bottom_of_stack = fault_addr < esp : fault_addr : esp;
+   bool within_max_stack = bottom_of_stack - PGSIZE >= PHYS_BASE - MAX_STACK_SIZE
    return (push || pusha || sub_then_mov) && valid_user_vaddr && within_max_stack;
 }
