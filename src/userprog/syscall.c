@@ -193,30 +193,24 @@ sys_open (uint32_t *esp)
   if (fname == NULL)
     return -1;
 
+  cur = thread_current ();
+  /* No available FDs. */
+  if (cur->next_fd < 0)
+    return -1;
+
   lock_acquire (&filesys_lock);
   struct file *fp = filesys_open (fname);
   lock_release (&filesys_lock);
 
-  cur = thread_current ();
   /* File open unsuccessful or file limit hit */
-  if (fp == NULL || cur->next_fd < 0)
+  if (fp == NULL)
     return -1;
 
   ret = cur->next_fd;
   cur->fdtable[ret] = fp;
   
-  /* Find next available fd */
-  int new_fd = EXEC_FD + 1;
-  for (; new_fd < MAX_FILES; new_fd++) 
-    {
-      if (cur->fdtable[new_fd] == NULL)
-      {
-        cur->next_fd = new_fd;
-        return ret;
-      }
-    }
+  thread_update_next_fd (cur);
 
-  cur->next_fd = -1;
   return ret;
 
 }
@@ -373,21 +367,8 @@ sys_close (uint32_t *esp)
     return;
   
   struct thread *cur = thread_current ();
-  struct file *fp = cur->fdtable[fd];
-
-  /* Have previously closed the given file descriptor. */
-  if (fp == NULL)
-    return;
+  thread_close_fd (cur, fd);
   
-  lock_acquire (&filesys_lock);
-  file_close (fp);
-  lock_release (&filesys_lock);
-
-  cur->fdtable[fd] = NULL;
-
-  if (fd < cur->next_fd)
-    cur->next_fd = fd;
-
 }
 
 /* Returns the int at position POS on stack pointed at
@@ -435,15 +416,14 @@ get_arg_string (void *esp, int pos, int limit)
   str_ptr = (char **)esp + pos;
 
   /* Check the bytes of the char * are all in valid memory */
-  if (!is_valid_memory (str_ptr, sizeof (char *)))
+  if (!is_valid_memory (str_ptr, sizeof (char *)) || !is_valid_address(*str_ptr))
     exit (-1);
 
   end = *str_ptr + limit + 1;
-
   
-  for (cur = *str_ptr; cur < end; cur++)
+  for (cur = *str_ptr + 1; cur < end; cur++)
     {
-      if (!is_valid_address (cur))
+      if (pg_ofs(cur) == 0 && !is_valid_address (cur))
         exit (-1);
       
       if (*cur == '\0')

@@ -155,14 +155,18 @@ process_exit (void)
   uint32_t *pd;
 
   printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
-  cur->exit_info->exit_status = cur->exit_status;
-  sema_up (&cur->exit_info->exited);
+  
+  if (cur->exit_info != NULL)
+    {
+      cur->exit_info->exit_status = cur->exit_status;
+      sema_up (&cur->exit_info->exited);
 
-  lock_acquire (&cur->exit_info->refs_lock);
-  int ref = --(cur->exit_info->refs_cnt);
-  lock_release (&cur->exit_info->refs_lock);
-  if (ref == 0)
-    palloc_free_page (cur->exit_info);
+      lock_acquire (&cur->exit_info->refs_lock);
+      int ref = --(cur->exit_info->refs_cnt);
+      lock_release (&cur->exit_info->refs_lock);
+      if (ref == 0)
+        palloc_free_page (cur->exit_info);
+    }
 
   /* Iterate through child processes' child exit info structs and
      decrement the reference count since parent is exiting. Free 
