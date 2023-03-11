@@ -36,7 +36,8 @@ struct inode
     int open_cnt;                       /* Number of openers. */
     bool removed;                       /* True if deleted, false otherwise. */
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
-    struct inode_disk data;             /* Inode content. */
+    block_sector_t file_start;          /* First data sector. */
+    off_t length;                       /* File size in bytes. */
   };
 
 /* Returns the block device sector that contains byte offset POS
@@ -47,8 +48,8 @@ static block_sector_t
 byte_to_sector (const struct inode *inode, off_t pos) 
 {
   ASSERT (inode != NULL);
-  if (pos < inode->data.length)
-    return inode->data.start + pos / BLOCK_SECTOR_SIZE;
+  if (pos < inode->length)
+    return inode->file_start + pos / BLOCK_SECTOR_SIZE;
   else
     return -1;
 }
@@ -113,6 +114,7 @@ inode_open (block_sector_t sector)
 {
   struct list_elem *e;
   struct inode *inode;
+  struct inode_disk data;
 
   /* Check whether this inode is already open. */
   for (e = list_begin (&open_inodes); e != list_end (&open_inodes);
@@ -137,7 +139,9 @@ inode_open (block_sector_t sector)
   inode->open_cnt = 1;
   inode->deny_write_cnt = 0;
   inode->removed = false;
-  block_read (fs_device, inode->sector, &inode->data);
+  block_read (fs_device, inode->sector, &data);
+  inode->file_start = data.start;
+  inode->length = data.length;
   return inode;
 }
 
@@ -177,8 +181,8 @@ inode_close (struct inode *inode)
       if (inode->removed) 
         {
           free_map_release (inode->sector, 1);
-          free_map_release (inode->data.start,
-                            bytes_to_sectors (inode->data.length)); 
+          free_map_release (inode->file_start,
+                            bytes_to_sectors (inode->length)); 
         }
 
       free (inode); 
@@ -341,5 +345,5 @@ inode_allow_write (struct inode *inode)
 off_t
 inode_length (const struct inode *inode)
 {
-  return inode->data.length;
+  return inode->length;
 }
