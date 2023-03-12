@@ -17,8 +17,32 @@ Gordon Martinez-Piedra <martigp@stanford.edu>
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
-An additional note that we have is a description of why we included the
-`get_new_lock` member
+Two pieces of important synchronization were not addressed the Buffer Cache
+section. The first was the use of the condition variable. The second was the
+global `get_new_lock`.
+
+Threads do no have a lock when they read / write to a cached block, they only 
+acquire corresponding entry the lock before to update the entry's metadata to 
+say they are reading and writing (`accessed`, `total_refs`, `write_refs`) and 
+after to update the entry's metadata to indicate they have finished doing so. 
+This allows concurrent read and write to all cached blocks or including
+concurrent R/W to a single cached block. Because of this, the write back thread,
+that needs to ensure no threads are writing to the block while writing it back
+waits for a condition variable that is signalled once `write_refs` is
+decremented to 0 before it acquires the entry's lock to gain exclusive access
+of the entry.
+
+With just fine grained locking for buffer cache entries, a race condition exists
+when two threads are trying to access a block that isn't in the cache. Once
+they both iterate through the table and realize the entry isn't there they need
+to synchronize to ensure that only one of them loads the block in. To do this
+the `get_new_lock` is acquired when acquiring and entry and loading the desired
+block into it. Therefore, once the `get_new_lock` is acquired, a second check
+is done to verify that the sector the thread is attempted to load in wasn't 
+loaded between the time it first checked the buffer cache and when it acquired
+the lock. The reason we do a second check instead of using a global lock during
+the first check, is to allow concurrent access to block sectors that are
+currently cached. 
 
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
