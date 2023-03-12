@@ -1,4 +1,5 @@
-#include "devices/block.h"
+#include <string.h>
+#include <stdio.h>
 #include "filesys/cache.h"
 #include "threads/malloc.h"
 #include "threads/synch.h"
@@ -12,6 +13,8 @@ struct cache_entry
         bool accessed;                  /* Accessed bit for eviction. */
         bool dirty;                     /* Dirty bit for eviction and write
                                            back. */
+        bool allocated;                 /* Whether cache_entry has been 
+                                           allocated. */
         struct condition no_writers;    /* For write back, signal when done 
                                            write_refs is zero. */
         struct lock lock;               /* Lock held while evicting or writing
@@ -34,9 +37,9 @@ static int cached_count;
 extern struct block *fs_device;
 
 static struct cache_entry *cache_get_sector (block_sector_t sector, bool write);
-static struct cache_entry *cache_get_new (block_sector_t sector, bool write);
+static struct cache_entry *cache_add_sector (block_sector_t sector, bool write);
 static struct cache_entry *cache_alloc (void);
-static struct cache_entry *cache_evict (void);
+static struct cache_entry *evict_cache_entry (void);
 static void tick_clock_hand (void);
 
 void
@@ -65,8 +68,41 @@ cache_init (void)
         }
 
     /* Create the cleanup thread. */
-    /* thread_create ('write_back_thread', PRI_DEFAULT, write_back_fn, NULL); */
+    /* thread_create ('write_back', PRI_DEFAULT, write_back_fn, NULL); */
 }
+
+void
+cache_read (block_sector_t sector, void *buffer, off_t size, off_t ofs)
+{
+    struct cache_entry *e = cache_get_sector (sector, false);
+    memcpy (buffer, e->data + ofs, size);
+    
+    /* Update metadata on completion of read. */
+    lock_acquire (&e->lock);
+    e->accessed = true;
+    ASSERT (e->total_refs > 0);
+    e->total_refs--;
+    lock_release (&e->lock);
+}
+
+void
+cache_write (block_sector_t sector, const void *buffer, off_t size, off_t ofs)
+{
+    struct cache_entry *e = cache_get_sector (sector, true);
+    memcpy (e->data + ofs, buffer, size);
+    
+    /* Update metadata on completion of read. */
+    lock_acquire (&e->lock);
+    e->accessed = true;
+    e->dirty = true;
+    ASSERT (e->total_refs > 0);
+    e->total_refs--;
+    if (--e->write_refs == 0)
+        cond_signal (&e->no_writers, &e->lock);
+    lock_release (&e->lock);
+}
+
+
 
 /* Returns a cache entry corresponding to SECTOR with up to date metadata.
    Increments the cache entry's write_cnt if WRITE flag is true. */
@@ -78,7 +114,7 @@ cache_get_sector (block_sector_t sector, bool write)
         {
             lock_acquire (&cur->lock);
             /* data NULL means not in use. */
-            if (cur->data != NULL && cur->sector == sector)
+            if (cur->allocated && cur->sector == sector)
                 {
                     /* Maybe don't want to. */
                     cur->total_refs++;
@@ -89,8 +125,9 @@ cache_get_sector (block_sector_t sector, bool write)
                     lock_release (&cur->lock);
                     return cur;
                 }
+            lock_release (&cur->lock);
         }
-    return cache_get_new (sector, write);
+    return cache_add_sector (sector, write);
 }
 
 /* Gets a new cache entry for the sector SECTOR either via allocation or
@@ -98,37 +135,42 @@ cache_get_sector (block_sector_t sector, bool write)
    If flage WRITE is true, sets write_refs to 1, otherwise 0. Returns the a
    fully populated cache entry for sector SECTOR. */
 static struct cache_entry *
-cache_get_new (block_sector_t sector, bool write)
+cache_add_sector (block_sector_t sector, bool write)
 {
     lock_acquire (&get_new_lock);
     /* Allocate new cache entry. Will have lock to entry  */
     struct cache_entry *new_cache;
-    if (cached_count < MAX_CACHE_ENTRIES)
+    bool can_allocate = cached_count < MAX_CACHE_ENTRIES;
+    if (can_allocate)
         new_cache = cache_alloc ();
     /* Evict an entry. */
     else
-        new_cache = cache_evict ();
+        new_cache = evict_cache_entry ();
     
     if (new_cache == NULL)
-        PANIC ("Issue with getting new frame, should never retrun NULL");
+        PANIC ("Issue with getting new frame via %s, should never retrun NULL",
+               can_allocate ? "ALLOCATION" : "EVICTION");
     
+    lock_release (&get_new_lock);
     ASSERT (lock_held_by_current_thread (&new_cache->lock));
     new_cache->sector = sector;
 
     /* Setting correct ref counts. */
     ASSERT (new_cache->total_refs == 0);
     new_cache->total_refs = 1;
+    ASSERT (new_cache->write_refs == 0);
     new_cache->write_refs = write ? 1 : 0;
 
-    new_cache->accessed = false;
+    new_cache->accessed = true;
     new_cache->dirty = false;
 
     block_read (fs_device, sector, new_cache->data);
-    
+    /* Schedule a thread for read ahead. */
+
+    /* thread_create ('read_ahead', PRI_DEFAULT, write_back_fn, sector); */
     /* Should always have the lock here. */
     lock_release (&new_cache->lock);
-    lock_release (&get_new_lock);
-    return  new_cache;
+    return new_cache;
 }
 
 /* Iterates through cache and returns first free entry. */
@@ -140,8 +182,9 @@ cache_alloc (void)
         {
             lock_acquire (&candidate->lock);
             /* data NULL means not in use. */
-            if (candidate->sector == 0)
+            if (!candidate->allocated)
                 {
+                    candidate->allocated = true;
                     cached_count++;
                     return candidate;
                 }
@@ -154,14 +197,15 @@ cache_alloc (void)
    Writes frame back to the filesys if it is dirty and returns pointer to
    cache_entry. */
 static struct cache_entry *
-cache_evict (void)
+evict_cache_entry (void)
 {
     int loop_cnt = 0;
     struct cache_entry *clock_start = clock_hand;
     while (loop_cnt < MAX_CLOCK_LOOPS)
         {
             lock_acquire (&clock_hand->lock);
-            if (clock_hand->sector != 0 && clock_hand->total_refs == 0)
+            /* If evicting, everything should be allocated? */
+            if (clock_hand->allocated && clock_hand->total_refs == 0)
                 {
                     /* Eviction logic. */
                     if (clock_hand->accessed)
@@ -175,17 +219,47 @@ cache_evict (void)
                                 block_write (fs_device, clock_hand->sector,
                                              clock_hand->data);
                             
+                            struct cache_entry *evicted = clock_hand;
                             tick_clock_hand ();
-                            return clock_hand - 1;
+                            return evicted;
                         }
                 }
             lock_release (&clock_hand->lock);
+
             tick_clock_hand ();
             if (clock_hand == clock_start)
                 loop_cnt++;
         }
-    PANIC ("Unable to evict cache entry");
     return NULL;
+}
+
+void
+cache_write_to_disk (bool filesys_done)
+{
+    struct cache_entry *cur;
+    for (cur = cache_begin; cur < cache_end; cur++)
+        {
+            lock_acquire (&cur->lock);
+            if (cur->allocated)
+                {
+                    while (cur->write_refs != 0)
+                        cond_wait (&cur->no_writers, &cur->lock);
+
+                    if (cur->dirty)
+                        block_write (fs_device, cur->sector, cur->data);
+                    
+                    if (filesys_done)
+                        free (cur->data);
+                    else
+                        cur->dirty = 0;
+                }
+            
+            lock_release (&cur->lock);
+
+        }
+    
+    if (filesys_done)
+        free (cache_begin);
 }
 
 /* Moves the clock hand forward once in the ring buffer. */
