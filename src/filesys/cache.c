@@ -5,6 +5,7 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 
+/* An entry in the buffer cache. */
 struct cache_entry
     {
         block_sector_t sector;          /* Block sector represented. */
@@ -15,31 +16,32 @@ struct cache_entry
                                            back. */
         bool allocated;                 /* Whether cache_entry has been 
                                            allocated. */
-        struct condition no_writers;    /* For write back, signal when done 
-                                           write_refs is zero. */
-        struct lock lock;               /* Lock held while evicting or writing
-                                           back. */  
-        uint8_t *data;                  /* Actual cached sector, proxy for
-                                           whether in use. */
+        struct condition no_writers;    /* For write back, signal when 
+                                           write_refs decremented to zero. */
+        struct lock lock;               /* Lock to synchronize access to cache
+                                           entry metadata. */  
+        uint8_t *data;                  /* Actual cached sector. */
     };
 
-/* Lock for finding a new cache entry to load sector into. */
+
+/* Synchronization when loading block sector into cache for race between
+   two processes that both can't find block sector in cache. Prevents double
+   loading of that block sector. */
 static struct lock get_new_lock;
-/* Block Cache Begin. */
+/* Buffer Cache Begin. */
 static struct cache_entry *cache_begin;
-/* Final cache entry. */
+/* Buffer cache end (for iteration). */
 static struct cache_entry *cache_end;
 /* Clock hand for eviction. */
 static struct cache_entry *clock_hand;
 /* Count of number in use. */
 static int cached_count;
-/* Filesystem device. */
+/* Filesystem device for filesys R/W. */
 extern struct block *fs_device;
 
 static struct cache_entry *cache_get_sector (block_sector_t sector, bool write,
                                              bool read_ahead);
-static struct cache_entry *cache_add_sector (block_sector_t sector, bool write,
-                                             bool read_ahead);
+static struct cache_entry *cache_add_sector (block_sector_t sector);
 static struct cache_entry *cache_alloc (void);
 static struct cache_entry *evict_cache_entry (void);
 static void tick_clock_hand (void);
@@ -51,13 +53,13 @@ cache_init (void)
 {
     struct cache_entry * cur;
 
-    cache_begin = calloc (MAX_CACHE_ENTRIES, sizeof (struct cache_entry));
+    cache_begin = calloc (CACHE_SIZE, sizeof (struct cache_entry));
     if (cache_begin == NULL)
         PANIC ("Unable to allocate filesys cache");
     
     /* Initializing statics. */
     clock_hand = cache_begin;
-    cache_end = cache_begin + MAX_CACHE_ENTRIES;
+    cache_end = cache_begin + CACHE_SIZE;
     lock_init (&get_new_lock);
     cached_count = 0;
 
@@ -75,6 +77,9 @@ cache_init (void)
     thread_create ("write_back", PRI_DEFAULT, write_back_fn, NULL);
 }
 
+/* Reads SIZE bytes from cache entry for block sector SECTOR into BUFFER, 
+   starting at position OFS. Updates corresponding cache entry metadata,
+   including loading sector into cache if not present. */
 void
 cache_read (block_sector_t sector, void *buffer, off_t size, off_t ofs)
 {
@@ -88,6 +93,9 @@ cache_read (block_sector_t sector, void *buffer, off_t size, off_t ofs)
     lock_release (&e->lock);
 }
 
+/* Writes SIZE bytes from BUFFER into cached block sector SECTOR, starting at 
+   position OFS. Updates corresponding cache entry metadata, including
+   loading sector into cache if not present. */
 void
 cache_write (block_sector_t sector, const void *buffer, off_t size, off_t ofs)
 {
@@ -99,6 +107,7 @@ cache_write (block_sector_t sector, const void *buffer, off_t size, off_t ofs)
     e->dirty = true;
     ASSERT (e->total_refs > 0);
     e->total_refs--;
+    /* Signals to write-back thread that can start writing back. */
     if (--e->write_refs == 0)
         cond_signal (&e->no_writers, &e->lock);
     lock_release (&e->lock);
@@ -106,88 +115,96 @@ cache_write (block_sector_t sector, const void *buffer, off_t size, off_t ofs)
 
 
 
-/* Returns a cache entry corresponding to SECTOR with up to date metadata.
-   Increments the cache entry's write_cnt if WRITE flag is true. */
+/* Returns a cache entry corresponding to SECTOR loading from disk if 
+   not already present. Increments the cache entry's write_cnt if WRITE flag 
+   is true. If READ_AHEAD flag set, asynchronously reads next block sector if 
+   block sector SECTOR is not yet cached.*/
 static struct cache_entry *
 cache_get_sector (block_sector_t sector, bool write, bool read_ahead)
 {
-    struct cache_entry *cur;
-    for (cur = cache_begin; cur < cache_end; cur++)
+    struct cache_entry *entry;
+    bool is_present = false;
+    for (entry = cache_begin; entry < cache_end; entry++)
         {
-            lock_acquire (&cur->lock);
-            /* data NULL means not in use. */
-            if (cur->allocated && cur->sector == sector)
+            lock_acquire (&entry->lock);
+            if (entry->allocated && entry->sector == sector)
                 {
-                    /* Only update use information if guarantee use. */
-                    if (!read_ahead)
-                        {
-                            cur->total_refs++;
-                            if (write)
-                                cur->write_refs++;
-                            
-                            cur->accessed = true;
-                        }
-                    /* Later might want to keep hold of this so can set
-                       all other metadata while lock held. */
-                    lock_release (&cur->lock);
-                    return cur;
+                    is_present = true;
+                    break;
                 }
-            lock_release (&cur->lock);
+            lock_release (&entry->lock);
         }
-    return cache_add_sector (sector, write, read_ahead);
+    
+    if (!is_present)
+        entry = cache_add_sector (sector);
+    
+    /* If not read ahead then a true access to update relevant metadata. */
+    if (!read_ahead)
+        {
+            entry->total_refs++;
+            if (write)
+                entry->write_refs++;
+            entry->accessed = true;
+        }
+    
+    lock_release (&entry->lock);
+
+    if (!is_present && read_ahead)
+        thread_create ("read_ahead", PRI_DEFAULT, read_ahead_fn,
+                       (void *) (sector + 1));
+
+    return entry;
 }
 
 /* Gets a new cache entry for the sector SECTOR either via allocation or
-   eviction if not free blocks. It then intializes the cache entry metadata.
-   If flage WRITE is true, sets write_refs to 1, otherwise 0. Returns the a
-   fully populated cache entry for sector SECTOR. */
+   eviction if no free cache entries and initializes metadata. */
 static struct cache_entry *
-cache_add_sector (block_sector_t sector, bool write, bool read_ahead)
+cache_add_sector (block_sector_t sector)
 {
     lock_acquire (&get_new_lock);
-    /* Allocate new cache entry. Will have lock to entry  */
-    struct cache_entry *new_cache;
-    bool can_allocate = cached_count < MAX_CACHE_ENTRIES;
+
+    /* Second check to account for race between two threads loading same
+       block sector into buffer cache. */
+    struct cache_entry *new_entry;
+    for (new_entry = cache_begin; new_entry < cache_end; new_entry++)
+        {
+
+            /* No fine grain lock required here becuase must have the
+               get_new_lock lock to change these members. */
+            if (new_entry->allocated && new_entry->sector == sector)
+                {
+                    /* Ordering very important. Acquire the the entry lock
+                       before releasing get_new_lock so entry isn't evicted
+                       between these two steps. */
+                    lock_acquire (&new_entry->lock);
+                    goto done;
+                }
+        }
+
+    bool can_allocate = cached_count < CACHE_SIZE;
     if (can_allocate)
-        new_cache = cache_alloc ();
+        new_entry = cache_alloc ();
     /* Evict an entry. */
     else
-        new_cache = evict_cache_entry ();
+        new_entry = evict_cache_entry ();
     
-    if (new_cache == NULL)
+    if (new_entry == NULL)
         PANIC ("Issue with getting new frame via %s, should never retrun NULL",
                can_allocate ? "ALLOCATION" : "EVICTION");
     
-    lock_release (&get_new_lock);
-    ASSERT (lock_held_by_current_thread (&new_cache->lock));
-    new_cache->sector = sector;
+    ASSERT (lock_held_by_current_thread (&new_entry->lock));
+    ASSERT (new_entry->write_refs == 0);
+    ASSERT (new_entry->total_refs == 0);
+    new_entry->sector = sector;
+    block_read (fs_device, sector, new_entry->data);
 
-    ASSERT (new_cache->total_refs == 0);
-    /* Updating correct entry use metadata. */
-    if (!read_ahead)
-        {
-                ASSERT (new_cache->total_refs == 0);
-                new_cache->total_refs = 1;
-                ASSERT (new_cache->write_refs == 0);
-                new_cache->write_refs = write ? 1 : 0;
-                new_cache->accessed = true;
-        }
-    
-    new_cache->dirty = false;
-
-    block_read (fs_device, sector, new_cache->data);
-    /* Schedule a thread for read ahead. */
-
-    /* Should always have the lock here. */
-    lock_release (&new_cache->lock);
-    if (read_ahead)
-        thread_create ("read_ahead", PRI_DEFAULT, read_ahead_fn,
-                       (void *) (sector + 1));
-    
-    return new_cache;
+    done:
+        lock_release (&get_new_lock);
+        return new_entry;
 }
 
-/* Iterates through cache and returns first free entry. */
+/* Iterates through cache and returns first free entry. Returns NULL if
+   no free entries. */
 static struct cache_entry *
 cache_alloc (void)
 {
@@ -195,7 +212,6 @@ cache_alloc (void)
     for (candidate = cache_begin; candidate < cache_end; candidate++)
         {
             lock_acquire (&candidate->lock);
-            /* data NULL means not in use. */
             if (!candidate->allocated)
                 {
                     candidate->allocated = true;
@@ -218,17 +234,15 @@ evict_cache_entry (void)
     while (loop_cnt < MAX_CLOCK_LOOPS)
         {
             lock_acquire (&clock_hand->lock);
-            /* If evicting, everything should be allocated? */
             if (clock_hand->allocated && clock_hand->total_refs == 0)
                 {
-                    /* Eviction logic. */
                     if (clock_hand->accessed)
                         {
                             clock_hand->accessed = 0;
                         }
                     else
                         {
-                            /* Write back to disk. */
+                            /* Write back to disk only when dirty. */
                             if (clock_hand->dirty)
                                 block_write (fs_device, clock_hand->sector,
                                              clock_hand->data);
@@ -247,6 +261,9 @@ evict_cache_entry (void)
     return NULL;
 }
 
+/* Writes all dirty buffer cache entries to disk. If FILESYS_DONE flag set,
+   frees memory associated with cached block after written back and then
+   frees cache before returning. */
 void
 cache_write_to_disk (bool filesys_done)
 {
@@ -284,7 +301,7 @@ tick_clock_hand (void)
         clock_hand = cache_begin;
 }
 
-/* Reads sector encoded in AUX into the cache. */
+/* Reads block sector encoded in AUX into the cache. */
 static void
 read_ahead_fn (void *aux)
 {
@@ -292,6 +309,7 @@ read_ahead_fn (void *aux)
     cache_get_sector (sector, false, true);
 }
 
+/* Periodically writes all dirty buffer cache entries to disk. */
 static void
 write_back_fn (void *aux UNUSED)
 {
