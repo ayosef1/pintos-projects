@@ -40,6 +40,28 @@ free_map_allocate (size_t cnt, block_sector_t *sectorp)
   return sector != BITMAP_ERROR;
 }
 
+/* Allocates NUM (not consecutive) sectors from the free map and stores
+   the sectors in SECTOR_NUMS.
+   Returns true if successful, false if not enough ectors were available or 
+   if the free_map file could not be written. */
+bool
+free_map_allocate_non_consec (size_t num, block_sector_t *sector_nums)
+{
+  size_t i;
+  for (i = 0; i < num; i++)
+    {
+      if (!free_map_allocate (1, sector_nums + i))
+        {
+          /* Unsuccessful. Free the sectors we were able to allocat. */
+          size_t j;
+          for (j = 0; j < i; j++)
+              free_map_release (sector_nums[j], 1);
+          return false;
+        }
+    }
+  return true;
+}
+
 /* Makes CNT sectors starting at SECTOR available for use. */
 void
 free_map_release (block_sector_t sector, size_t cnt)
