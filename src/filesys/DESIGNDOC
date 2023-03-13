@@ -17,6 +17,9 @@ Gordon Martinez-Piedra <martigp@stanford.edu>
 >> If you have any preliminary comments on your submission, notes for the
 >> TAs, or extra credit, please give them here.
 
+An additional note that we have is a description of why we included the
+`get_new_lock` member
+
 >> Please cite any offline or online sources you consulted while
 >> preparing your submission, other than the Pintos documentation, course
 >> text, lecture notes, and course staff.
@@ -100,14 +103,121 @@ Gordon Martinez-Piedra <martigp@stanford.edu>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+/* Size of buffer cache. */
+#define CACHE_SIZE 64
+/* Maximum number of iterations over buffer cache for eviction. */                            
+#define MAX_CLOCK_LOOPS 2
+/* Number of ticks between periodic buffer cache write back.
+   Equivalent of 10 seconds. */
+#define WRITE_BACK_PERIOD TIMER_FREQ * 10
+
+Added new data structure to represent cache entries.
+
+struct cache_entry
+    {
+        block_sector_t sector;          /* Block sector represented. */
+        int write_refs;                 /* Total number of writer references. */
+        int total_refs;                 /* Total number of references. */
+        bool accessed;                  /* Accessed bit for eviction. */
+        bool dirty;                     /* Dirty bit for eviction and write
+                                           back. */
+        bool allocated;                 /* Whether cache_entry has been 
+                                           allocated. */
+        
+        `no_writers` condition variable ensures that no thread is writing to 
+        cached block sector when write back is happening. Signalled when
+        `write_refs` is decremented to 0.
+        struct condition no_writers;
+        struct lock lock;               /* Lock to synchronize access to cache
+                                           entry metadata. */  
+        uint8_t *data;                  /* Actual cached sector. */
+    };
+
+Static members of cache.c:
+
+    Synchronization when loading block sector into cache for race between
+    two processes that both can't find block sector in cache. Prevents double
+    loading of that block sector.
+
+        static struct lock get_new_lock;
+
+    /* Block Cache Begin. */
+    static struct cache_entry *cache_begin;
+    /* Buffer cache end (for iteration). */
+    static struct cache_entry *cache_end;
+    /* Clock hand for eviction. */
+    static struct cache_entry *clock_hand;
+    /* Count of number in use. */
+    static int cached_count;
+    /* Filesystem device for filesys R/W. */
+    extern struct block *fs_device;
+
+
 ---- ALGORITHMS ----
 
 >> C2: Describe how your cache replacement algorithm chooses a cache
 >> block to evict.
 
+We implement a version of the clock algorithm for our cache replacement
+algorithm. Accordingly each entry has an `accessed` flag that is set whenever
+its corresponding cached block sector is read from or written to.
+
+The buffer cache is statically allocated at boot (i.e. doesn't change size once
+allocated), so each entry has an `allocated` flag to make sure only allocated
+entries are considered for eviction. Similarly the `total_refs` member tracks
+whether the cache block is being used. If `total_refs` is greater than 0, an
+entry is not considered for eviction.
+
+The clock hand is initialized (at boot) to point to the first
+entry in the buffer cache. During eviction, the algorithm acquires the lock
+for the entry that the clock hand is pointing to. If the entry is not allocated
+or is in use (`total_refs` > 0) the lock on the entry is released and the clock
+hand proceeds. Next the accessed flag is checked. If it is set, it is set to
+0 and the clock hand procceeds (once the lock is dropped). Otherwise that cache
+entry is chosen for eviction and the clock hand is incremented by one for the
+next eviciton.
+
+If an entry isnt' selected after two loops of the circular buffer cache, then
+the eviction algorithm stops and NULL is returned. Two loops chosen to handle
+the case that all accessed flags were set of entries that were allocated and so
+a second loop of the buffer cache was required to select an entry for eviction.
+
 >> C3: Describe your implementation of write-behind.
 
+When the buffer cache is created and initialized at boot, the `write-back`
+thread is created. The `write-back` thread wakes up every 10 seconds and
+writes back each entry in the buffer cache that is dirty. Whether a cache is
+dirty is tracked by the `dirty` flag in each cache entry. This flag is set
+when the cached block sector is written to and initialized to false. The thread
+is given default priority (31).
+
+To write behind, the `write-back` thread iterates across the buffer cache.
+For each allocated entry it acquires the entries' lock and waits on the 
+condition variable `no_waiters` to ensure that no threads are currently writing
+to the entry. Once no more threads are writing to cached block sector, it gains
+exclusive access, writes the cached block back to disk if it is dirty and then
+moves on to the next cache entry (after dropping the current one's lock).
+Once it has iterated across the whole buffer cache it goes back to sleep for 10
+seconds.
+
+On shutdown, the main thread writes back each allocated cache entry and frees
+all associated memory with each entry. After iterating through the list is also
+frees the entire buffer cache.
+
 >> C4: Describe your implementation of read-ahead.
+
+Whenever a block sector is read in from disk into the buffer cache, the next
+block sector is read into the buffer cache asynchronously by a new thread that
+is diven default priority (31). The `read-ahead` thread checks if the thread is
+already in the buffer cache, if it is it does nothing and exits.
+
+If the next block sector isn't in the cache it loads it from disk (evicting if
+necessary). Note that entries added to the buffer cache by `read-ahead` are
+initialized differently. Specifically, their accessed flag is set to 0 and
+its `total_refs` is not incremented. This is because a block sector read ahead
+isn't actively needed by a thread, it is pre-emptive and so these entries 
+should be available for eviciton if necessary.
+
 
 ---- SYNCHRONIZATION ----
 
@@ -115,8 +225,34 @@ Gordon Martinez-Piedra <martigp@stanford.edu>
 >> buffer cache block, how are other processes prevented from evicting
 >> that block?
 
+Each cache entry has a lock that protects its metadata. Before a process
+accesses a cache entry, it first has to acquire the lock on that cache_entry.
+When process A reads or writes to a buffer cache block, it first acquires the
+cache entry lock and increments `total_refs`. It then releases the lock and
+begins reading / writing to the cached block. Once it has completed reading 
+/ writing, it acquires the lock again and decrements `total_refs`. This means
+whenever a process is actively reading / writing data in a buffer cache block
+that the `total_refs` is non-zero.
+
+Correspondingly, during eviction, when process B is deciding whether to evict
+a block from the cache it first acquires the cache lock and inspects its
+`total_refs` member. If this member is non-zero, it does not consider the entry
+for eviction. This means that blocks that are being actively written to or read
+from i.e. `total_refs` is non zero, will never be selected for eviction.
+
 >> C6: During the eviction of a block from the cache, how are other
 >> processes prevented from attempting to access the block?
+
+Similarly to above, when performing the eviction selection algorithm, the
+process acquires the lock on the cache entry to determine whether to select
+a given cache entry. If selected, the lock is still held and it is guaranteed
+that no other block is accessing the block (since `total_refs` must be 0 to
+be selected). This lock is only released once eviction is completed. Since a 
+process must acquire the cache entry' lock in order to access the block, if
+another process attempt to access the block during up until the moment that
+the eventually evicted block is selected to determine whether eligible for
+eviction it must wait until eviction is complete (when the entry's lock is
+released).
 
 ---- RATIONALE ----
 
