@@ -5,6 +5,7 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 
+#define DEFAULT_SECTOR UINT32_MAX
 /* An entry in the buffer cache. */
 struct cache_entry
     {
@@ -51,7 +52,7 @@ static void write_back_fn (void *aux UNUSED);
 void
 cache_init (void)
 {
-    struct cache_entry * cur;
+    struct cache_entry *cur;
 
     cache_begin = calloc (CACHE_SIZE, sizeof (struct cache_entry));
     if (cache_begin == NULL)
@@ -70,6 +71,7 @@ cache_init (void)
             cur->data = malloc (BLOCK_SECTOR_SIZE);
             if (cur->data == NULL)
                 PANIC ("Unable to allocate cache block.");
+            cur->sector = DEFAULT_SECTOR;
             /* All other members initialized to 0. */
         }
 
@@ -189,7 +191,7 @@ cache_add_sector (block_sector_t sector)
         new_entry = evict_cache_entry ();
     
     if (new_entry == NULL)
-        PANIC ("Issue with getting new frame via %s, should never retrun NULL",
+        PANIC ("Issue with getting new frame via %s, should never return NULL",
                can_allocate ? "ALLOCATION" : "EVICTION");
     
     ASSERT (lock_held_by_current_thread (&new_entry->lock));

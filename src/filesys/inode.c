@@ -12,14 +12,15 @@
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
-#define INODE_DIR_BLOCKS 122
+#define INODE_DIR_BLOCKS 121
+#define SINGLY_DIR_IDX 121
 #define DOUBLY_DIR_IDX 122
 
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk
   {
-    block_sector_t blocks[INODE_DIR_BLOCKS + 1];   /* Blocks used for payload data. */
+    block_sector_t blocks[DOUBLY_DIR_IDX + 1];   /* Blocks used for payload data. */
     off_t length;                       /* File size in bytes. */
     bool directory;                     /* Indicates if inode for directory. */
     unsigned magic;                     /* Magic number. */
@@ -42,7 +43,6 @@ struct inode
     int open_cnt;                       /* Number of openers. */
     bool removed;                       /* True if deleted, false otherwise. */
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
-    block_sector_t *blocks;             /* Location of payload data. */
     off_t length;                       /* File size in bytes. */
   };
 
@@ -54,29 +54,34 @@ struct inode
    disk where that block is stored. Starts search from doubly indirect block
    located at sector DOUBLY_INDIR. */
 static block_sector_t
-index_lookup_sector (const block_sector_t *blocks, int logical_idx)
+index_lookup_sector (const block_sector_t *blocks, size_t logical_idx)
 {
   /* Dealing with a direct block. */
   if (logical_idx < INODE_DIR_BLOCKS)
     return blocks[logical_idx];
 
+  /* Dealing with singly indirect block. */
+  block_sector_t singly_indir_block[NUMS_PER_SECTOR];
+  if (logical_idx < INODE_DIR_BLOCKS + NUMS_PER_SECTOR)
+    {
+      cache_read (blocks[SINGLY_DIR_IDX], singly_indir_block, NUMS_PER_SECTOR, 0);
+      return singly_indir_block[(logical_idx - INODE_DIR_BLOCKS) / NUMS_PER_SECTOR];
+    }
   /* Desired sector must be accessed via doubly indrect block */
   block_sector_t doubly_indir_block[NUMS_PER_SECTOR];
   int singly_indir_block_idx;
   int singly_indir_block_num;
-  block_sector_t singly_indir_block[NUMS_PER_SECTOR];
 
   /* Read the singly indirect block numbers into doubly_indir_block */
-  cache_read (blocks[DOUBLY_DIR_IDX], doubly_indir_block,
-              BLOCK_SECTOR_SIZE, 0);
+  cache_read (blocks[DOUBLY_DIR_IDX], doubly_indir_block, BLOCK_SECTOR_SIZE, 0);
   
-  singly_indir_block_idx = (logical_idx - INODE_DIR_BLOCKS) / NUMS_PER_SECTOR;
+  singly_indir_block_idx = (logical_idx - NUMS_PER_SECTOR - INODE_DIR_BLOCKS) / NUMS_PER_SECTOR;
   singly_indir_block_num = doubly_indir_block[singly_indir_block_idx];
 
   /* Read the direct block numbers into singly_indir_block */
   cache_read (singly_indir_block_num, singly_indir_block, BLOCK_SECTOR_SIZE, 0);
 
-  return singly_indir_block[(logical_idx - INODE_DIR_BLOCKS) % NUMS_PER_SECTOR];
+  return singly_indir_block[(logical_idx - NUMS_PER_SECTOR - INODE_DIR_BLOCKS) % NUMS_PER_SECTOR];
 }
 
 /* Returns the block device sector that contains byte offset POS
@@ -88,7 +93,11 @@ byte_to_sector (const struct inode *inode, off_t pos)
 {
   ASSERT (inode != NULL);
   if (pos < inode->length)
-    return index_lookup_sector (inode->blocks, pos / BLOCK_SECTOR_SIZE);
+  {
+    struct inode_disk data;
+    cache_read (inode->sector, &data, BLOCK_SECTOR_SIZE, 0);
+    return index_lookup_sector (data.blocks, pos / BLOCK_SECTOR_SIZE);
+  }
   else
     return -1;
 }
@@ -122,7 +131,7 @@ inode_create (block_sector_t sector, off_t length)
   ASSERT (sizeof *disk_inode == BLOCK_SECTOR_SIZE);
 
   disk_inode = calloc (1, sizeof *disk_inode);
-  printf ("Trying to allocate sectors for file for inode %u\n", sector);
+  // printf ("Trying to allocate sectors for file for inode %u\n", sector);
   if (disk_inode != NULL)
     {
       size_t sectors = bytes_to_sectors (length);
@@ -165,7 +174,8 @@ inode_create (block_sector_t sector, off_t length)
 
           /* Update the direct blocks on the inode. */
           size_t i;
-          for (i = 0; i < INODE_DIR_BLOCKS; i++)
+          size_t end = sectors < INODE_DIR_BLOCKS ? sectors: INODE_DIR_BLOCKS; 
+          for (i = 0; i < end; i++)
             disk_inode->blocks[i] = direct_on_inode[i];
           
           /* Update the doubly indirect block. */
@@ -173,7 +183,6 @@ inode_create (block_sector_t sector, off_t length)
             disk_inode->blocks[DOUBLY_DIR_IDX] = *doubly_indirect;
 
           /* Write the actual inode itself to its sector. */
-          PANIC ("successfully allocated.");
           cache_write (sector, disk_inode, BLOCK_SECTOR_SIZE, 0);
 
           if (large_file)
@@ -201,7 +210,6 @@ inode_create (block_sector_t sector, off_t length)
                 static char zeros[BLOCK_SECTOR_SIZE];
                 size_t i;
                 
-                
                 for (i = 0; i < sectors; i++)
                   {
                     size_t sect_num;
@@ -213,7 +221,7 @@ inode_create (block_sector_t sector, off_t length)
         }
         success = true; 
     }
-      free (disk_inode);
+  free (disk_inode);
   return success;
 }
 
@@ -252,7 +260,7 @@ inode_open (block_sector_t sector)
   inode->removed = false;
 
   cache_read (inode->sector, &data, BLOCK_SECTOR_SIZE, 0);
-  inode->blocks = data.blocks;
+  // memcpy (inode->blocks, data.blocks;
   // inode->file_start = data.start;
   inode->length = data.length;
   return inode;
@@ -298,8 +306,10 @@ inode_close (struct inode *inode)
       if (inode->removed) 
         {
           size_t i;
-  
-          size_t sectors = bytes_to_sectors (inode->length);
+          struct inode_disk data;
+          
+          cache_write (inode->sector, &data, BLOCK_SECTOR_SIZE, 0);
+          size_t sectors = bytes_to_sectors (data.length);
 
           if (sectors > 0)
             {
@@ -307,8 +317,7 @@ inode_close (struct inode *inode)
               for (i = 0; i < sectors; i++)
                 {
                   size_t sector_num;
-                  
-                  sector_num = index_lookup_sector (inode->blocks, i);
+                  sector_num = index_lookup_sector (data.blocks, i);
                   free_map_release (sector_num, 1);
                 }
             }
@@ -319,31 +328,31 @@ inode_close (struct inode *inode)
               /* Next, release the singly indirect blocks. */
               size_t num_singly = DIV_ROUND_UP (sectors - INODE_DIR_BLOCKS,
                                                 NUMS_PER_SECTOR);
-              cache_read (inode->blocks[DOUBLY_DIR_IDX], doubly_indir_block,
+              cache_read (data.blocks[DOUBLY_DIR_IDX], doubly_indir_block,
                           BLOCK_SECTOR_SIZE, 0);
               for (i = 0; i < num_singly; i++)
                   free_map_release (doubly_indir_block[i], 1);
 
               /* And then the doubly indirect block. */
-              free_map_release (inode->blocks[DOUBLY_DIR_IDX], 1);
+              free_map_release (data.blocks[DOUBLY_DIR_IDX], 1);
             }
           /* Finally, release the sector containing the inode. */
           free_map_release (inode->sector, 1);
         }
-      // else
-      //   {
-      //     /* Write INODE to disk*/
-      //     /* TODO: can cache flush INODE to disk for us. */
-      //     /* Can we assume it's in the cache? */
-      //     /* If not, doesn't that mean it's already been flushed to disk? */
-      //     /* Do we have to block_write ourselves? */
-      //     /* Do we write back to disk if we're removing? */
-      //         /* According to chatgpt - we should write back the inode
-      //               ensures file recoverability*
-      //            But do we also write back the data sectors? /
+      else
+        {
+          /* Write INODE to disk*/
+          /* TODO: can cache flush INODE to disk for us. */
+          /* Can we assume it's in the cache? */
+          /* If not, doesn't that mean it's already been flushed to disk? */
+          /* Do we have to block_write ourselves? */
+          /* Do we write back to disk if we're removing? */
+              /* According to chatgpt - we should write back the inode
+                    ensures file recoverability*
+                 But do we also write back the data sectors? /
 
-      //     /* Flush to disk*/
-      //   }
+          /* Flush to disk*/
+        }
       free (inode); 
     }
 }
@@ -370,7 +379,7 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
     {
       /* TODO: read the correct sector now that we indirectly address */
       /* Disk sector to read, starting byte offset within sector. */
-      block_sector_t sector_idx = byte_to_sector (inode, offset);
+      block_sector_t data_start = byte_to_sector (inode, offset);
       int sector_ofs = offset % BLOCK_SECTOR_SIZE;
 
       /* Bytes left in inode, bytes left in sector, lesser of the two. */
@@ -383,7 +392,7 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
       if (chunk_size <= 0)
         break;
       
-      cache_read (sector_idx, buffer + bytes_read, chunk_size, sector_ofs);
+      cache_read (data_start, buffer + bytes_read, chunk_size, sector_ofs);
       
       /* Advance. */
       size -= chunk_size;
@@ -413,7 +422,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
     {
       /* TODO: write to the correct sector now that we indirectly address */
       /* Sector to write, starting byte offset within sector. */
-      block_sector_t sector_idx = byte_to_sector (inode, offset);
+      block_sector_t data_start = byte_to_sector (inode, offset);      
       int sector_ofs = offset % BLOCK_SECTOR_SIZE;
 
       /* Bytes left in inode, bytes left in sector, lesser of the two. */
@@ -426,7 +435,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       if (chunk_size <= 0)
         break;
 
-      cache_write (sector_idx, buffer + bytes_written, chunk_size, sector_ofs);
+      cache_write (data_start, buffer + bytes_written, chunk_size, sector_ofs);
 
       /* Advance. */
       size -= chunk_size;
@@ -466,3 +475,125 @@ inode_length (const struct inode *inode)
   /* TODO: do we need a lock?*/
   return inode->length;
 }
+
+
+
+/* Trying to get the logic for writing sector numbers to indirect blocks down s*/
+        
+// /* The first INODE_DIR_BLOCKS in sector_nums are the sector ids of 
+//    direct blocks whose numbers are stored on the inode. The next 
+//    block is the singly indirect block, which stores the block numbers
+//    of 128 direct blocks. Following is the doubly indirect block which
+//    stores 128 block numbers each corresponding to a singly indirect
+//    block. */
+// static bool
+// write_sector_nums (struct inode_disk *disk_inode, size_t num_direct)
+// {
+//   size_t num_blocks;
+//   size_t num_singly;
+//   size_t num_doubly;
+//   size_t num_singly_on_doubly;
+
+//   /* Check if more direct blocks than available on inode are necessary. */
+//   num_singly = num_direct < INODE_DIR_BLOCKS ? 0 : 1;
+
+//   /* Check if singly direct block is not enough. */
+//   num_doubly = 0;
+//   if (num_direct > INODE_DIR_BLOCKS + NUMS_PER_SECTOR)
+//     {
+//       int remaining_direct;
+
+//       num_doubly = 1;
+//       remaining_direct = num_direct - INODE_DIR_BLOCKS - NUMS_PER_SECTOR;
+//       num_singly_on_doubly = DIV_ROUND_UP (remaining_direct, NUMS_PER_SECTOR);
+//     }
+
+//   /* Total number of sectors required for inode's data. */
+//   num_blocks = num_direct + num_singly + num_doubly + num_singly_on_doubly;
+
+//   block_sector_t sector_nums[num_blocks];
+//   if (!free_map_allocate_non_consec (num_blocks, sector_nums))
+//     return false;
+
+//   /* Update the direct blocks on the inode. */
+//   block_sector_t *direct_on_inode;
+//   direct_on_inode = sector_nums;
+
+//   size_t end = sectors < INODE_DIR_BLOCKS ? sectors: INODE_DIR_BLOCKS; 
+//   for (i = 0; i < end; i++)
+//     disk_inode->blocks[i] = direct_on_inode[i];
+    
+//   /* Update the singly indirect block on the inode. */
+//   if (num_singly == 1)
+//     {
+//       block_sector_t *singly_on_inode;
+//       singly_on_inode = sector_nums + SINGLY_DIR_IDX;
+//       singly_on_inode = sector_nums + SINGLY_DIR_IDX;
+//       disk_inode->blocks[SINGLY_DIR_IDX] = *singly_on_inode;
+//     }
+
+//   /* Update the doubly indirect block. */
+//   if (num_doubly == 1)
+//     {
+//       block_sector_t *doubly_on_inode;
+//       doubly_on_inode = sector_nums + DOUBLY_DIR_IDX;
+//       disk_inode->blocks[DOUBLY_DIR_IDX] = *doubly_on_inode;
+//     }
+
+//   /* Write the actual inode itself to its sector. */
+//   cache_write (sector, disk_inode, BLOCK_SECTOR_SIZE, 0);
+
+//   /* TODO: Determine how sector ids will be assigned. */
+
+//   /* Time to populate singly and doubly indirect blocks with block numbers. */
+//   sector_nums += INODE_DIR_BLOCKS + num_singly + num_doubly;
+//   /* First, take care of the doubly indirect block. */
+//   if (num_doubly == 1)
+//     {
+//       populate_indir_block (DOUBLY_DIR_IDX, sector_nums, num_singly_on_doubly);
+//       sector_nums += num_singly_on_doubly;
+//     }
+//   if (num_singly_on_doubly > 0)
+//     {
+//       size_t i;
+//       for (i = 0; i < num_singly_on_doubly; i++)
+//         {
+//           /* Populate sector i (singly indir block) w/ 512 or remaining sector ids (direct block) */
+//           populate_indir_block ()
+//         }
+//     }
+//   if (num_singly == 1)
+//     { 
+//       /* Populate singly indir block w/ 512 or remaining sector ids (direct block) */
+//       populate_indir_block (SINGLY_DIR_IDX, sector_nums, num_direct - INODE_DIR_BLOCKS);
+//       sector_nums += ____;
+//     }
+  
+//   zero_direct_blocks ();
+//   return true;
+// }
+
+// static void 
+// populate_indir_block (size_t indir_sect_id, block_sector_t *sector_nums,
+//                       block_sector_t num_sector_ids)
+// {
+//   cache_write (indir_sect_id, sector_nums,
+//                num_sector_ids * sizeof (block_sector_t), 0);
+// }
+
+// static void
+// zero_direct_blocks (struct inode_disk *data)
+// {
+//   size_t sectors;
+//   static char zeros[BLOCK_SECTOR_SIZE];
+//   size_t i;
+
+//   size_t sectors = bytes_to_sectors (data->length);
+//   for (i = 0; i < sectors; i++)
+//     {
+//       size_t sect_num;
+
+//       sect_num = index_lookup_sector (data->blocks, i);
+//       cache_write (sect_num, zeros, BLOCK_SECTOR_SIZE, 0);
+//     }
+// }
