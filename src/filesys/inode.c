@@ -65,7 +65,7 @@ index_lookup_sector (const block_sector_t *blocks, size_t logical_idx)
   if (logical_idx < INODE_DIR_BLOCKS + NUMS_PER_SECTOR)
     {
       cache_read (blocks[SINGLY_DIR_IDX], singly_indir_block, NUMS_PER_SECTOR, 0);
-      return singly_indir_block[(logical_idx - INODE_DIR_BLOCKS) / NUMS_PER_SECTOR];
+      return singly_indir_block[(logical_idx - INODE_DIR_BLOCKS)];
     }
   /* Desired sector must be accessed via doubly indrect block */
   block_sector_t doubly_indir_block[NUMS_PER_SECTOR];
@@ -74,14 +74,15 @@ index_lookup_sector (const block_sector_t *blocks, size_t logical_idx)
 
   /* Read the singly indirect block numbers into doubly_indir_block */
   cache_read (blocks[DOUBLY_DIR_IDX], doubly_indir_block, BLOCK_SECTOR_SIZE, 0);
-  
-  singly_indir_block_idx = (logical_idx - NUMS_PER_SECTOR - INODE_DIR_BLOCKS) / NUMS_PER_SECTOR;
+  size_t doubly_indir_offs = NUMS_PER_SECTOR + INODE_DIR_BLOCKS;
+
+  singly_indir_block_idx = (logical_idx - doubly_indir_offs) / NUMS_PER_SECTOR;
   singly_indir_block_num = doubly_indir_block[singly_indir_block_idx];
 
   /* Read the direct block numbers into singly_indir_block */
   cache_read (singly_indir_block_num, singly_indir_block, BLOCK_SECTOR_SIZE, 0);
 
-  return singly_indir_block[(logical_idx - NUMS_PER_SECTOR - INODE_DIR_BLOCKS) % NUMS_PER_SECTOR];
+  return singly_indir_block[(logical_idx - doubly_indir_offs) % NUMS_PER_SECTOR];
 }
 
 /* Returns the block device sector that contains byte offset POS
@@ -495,7 +496,7 @@ inode_length (const struct inode *inode)
 //   size_t num_singly_on_doubly;
 
 //   /* Check if more direct blocks than available on inode are necessary. */
-//   num_singly = num_direct < INODE_DIR_BLOCKS ? 0 : 1;
+//   num_singly = num_direct <= INODE_DIR_BLOCKS ? 0 : 1;
 
 //   /* Check if singly direct block is not enough. */
 //   num_doubly = 0;
