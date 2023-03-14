@@ -18,6 +18,7 @@ struct cache_entry
                                            allocated. */
         struct condition no_writers;    /* For write back, signal when 
                                            write_refs decremented to zero. */
+        struct condition no_refs;       /* For eviction, when on*/
         struct lock lock;               /* Lock to synchronize access to cache
                                            entry metadata. */  
         uint8_t *data;                  /* Actual cached sector. */
@@ -67,6 +68,7 @@ cache_init (void)
         {
             lock_init (&cur->lock);
             cond_init (&cur->no_writers);
+            cond_init (&cur->no_refs);
             cur->data = malloc (BLOCK_SECTOR_SIZE);
             if (cur->data == NULL)
                 PANIC ("Unable to allocate cache block.");
@@ -89,7 +91,8 @@ cache_read (block_sector_t sector, void *buffer, off_t size, off_t ofs)
     /* Update metadata on completion of read. */
     lock_acquire (&e->lock);
     ASSERT (e->total_refs > 0);
-    e->total_refs--;
+    if (--e->total_refs == 0)
+        cond_signal (&e->no_refs, &e->lock);
     lock_release (&e->lock);
 }
 
@@ -105,11 +108,11 @@ cache_write (block_sector_t sector, const void *buffer, off_t size, off_t ofs)
     /* Update metadata on completion of read. */
     lock_acquire (&e->lock);
     e->dirty = true;
-    ASSERT (e->total_refs > 0);
-    e->total_refs--;
     /* Signals to write-back thread that can start writing back. */
     if (--e->write_refs == 0)
         cond_signal (&e->no_writers, &e->lock);
+    if (--e->total_refs == 0)
+        cond_signal (&e->no_refs, &e->lock);
     lock_release (&e->lock);
 }
 
@@ -234,8 +237,11 @@ evict_cache_entry (void)
     while (loop_cnt < MAX_CLOCK_LOOPS)
         {
             lock_acquire (&clock_hand->lock);
-            if (clock_hand->allocated && clock_hand->total_refs == 0)
+            if (clock_hand->allocated)
                 {
+                    while (clock_hand->total_refs != 0)
+                        cond_wait (&clock_hand->no_refs, &clock_hand->lock);
+                    
                     if (clock_hand->accessed)
                         {
                             clock_hand->accessed = 0;
