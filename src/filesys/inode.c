@@ -49,10 +49,6 @@ struct inode
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
     block_sector_t file_start;          /* First data sector. */
     off_t length;                       /* File size in bytes. */
-    
-    
-    block_sector_t blocks [NUM_BLOCK_POINTERS]; /* Block pointers. */
-
     struct lock lock;                   /* Sync for file extension. */
   };
 
@@ -105,16 +101,16 @@ inode_create (block_sector_t sector, off_t length)
   if (free_map_allocate (sectors, &start)) 
     {
       // printf ("Allocated sector %u for file in inode w sector number %u\n", disk_inode->start, sector);
-      struct cache_entry *cache_entry;
-      struct inode_disk *disk_inode;
+  struct cache_entry *cache_entry;
+  struct inode_disk *disk_inode;
 
-      cache_entry = cache_add_sector (sector, true);
-      disk_inode = (struct inode_disk  *) cache_entry->data;
+  cache_entry = cache_add_sector (sector, true);
+  disk_inode = (struct inode_disk  *) cache_entry->data;
       disk_inode->start = start;
       disk_inode->length = length;
-      disk_inode->magic = INODE_MAGIC;
-      cache_entry->dirty = true;
-      lock_release (&cache_entry->lock);
+  disk_inode->magic = INODE_MAGIC;
+  cache_entry->dirty = true;
+  lock_release (&cache_entry->lock);
       if (sectors > 0) 
         {
           size_t i;
@@ -150,8 +146,8 @@ inode_open (block_sector_t sector)
       inode = list_entry (e, struct inode, elem);
       if (inode->sector == sector) 
         {
+          inode->open_cnt++;
           lock_release (&open_inodes_lock);
-          inode_reopen (inode);
           return inode; 
         }
     }
@@ -185,9 +181,9 @@ struct inode *
 inode_reopen (struct inode *inode)
 {
   if (inode != NULL) {
-    lock_acquire (&inode->lock);
+    lock_acquire (&open_inodes_lock);
     inode->open_cnt++;
-    lock_release (&inode->lock);
+    lock_release (&open_inodes_lock);
   }
   return inode;
 }
@@ -210,37 +206,24 @@ inode_close (struct inode *inode)
     return;
 
   /* Release resources if this was the last opener. */
-  lock_acquire (&inode->lock);
+  lock_acquire (&open_inodes_lock);
   if (--inode->open_cnt == 0)
     {
-      lock_release (&inode->lock);
-
-      /* Prevents deadlock and having to acquire the open_inodes_lock every
-         time we decrement open_cnt. */
-      lock_acquire (&open_inodes_lock);
-      lock_acquire (&inode->lock);
-      if (inode->open_cnt == 0)
-        {
-          list_remove (&inode->elem);
-          lock_release (&inode->lock);
-          lock_release (&open_inodes_lock);
- 
-          /* Deallocate blocks if removed. */
-          if (inode->removed) 
-            {
-              free_map_release (inode->sector, 1);
-              free_map_release (inode->file_start,
-                                bytes_to_sectors (inode->length)); 
-            }
-          free (inode);
-          return;
-        }
-        lock_release (&inode->lock);
+        list_remove (&inode->elem);
         lock_release (&open_inodes_lock);
+
+        /* Deallocate blocks if removed. */
+        if (inode->removed) 
+          {
+            free_map_release (inode->sector, 1);
+            free_map_release (inode->file_start,
+                              bytes_to_sectors (inode->length)); 
+          }
+        free (inode);
         return;
       /* Remove from inode list and release lock. */
     }
-  lock_release (&inode->lock);
+  lock_release (&open_inodes_lock);
 }
 
 /* Marks INODE to be deleted when it is closed by the last caller who
