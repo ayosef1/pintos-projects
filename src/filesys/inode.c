@@ -48,7 +48,6 @@ struct inode
     bool removed;                       /* True if deleted, false otherwise. */
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
     block_sector_t file_start;          /* First data sector. */
-    off_t length;                       /* File size in bytes. */
     struct lock lock;                   /* Sync for file extension. */
   };
 
@@ -60,7 +59,7 @@ static block_sector_t
 byte_to_sector (const struct inode *inode, off_t pos) 
 {
   ASSERT (inode != NULL);
-  if (pos < inode->length)
+  if (pos < inode_length(inode))
     return inode->file_start + pos / BLOCK_SECTOR_SIZE;
   else
     return -1;
@@ -167,7 +166,6 @@ inode_open (block_sector_t sector)
 
   cache_read (inode->sector, &data, BLOCK_SECTOR_SIZE, 0);
   inode->file_start = data.start;
-  inode->length = data.length;
 
   lock_acquire (&open_inodes_lock);
   list_push_front (&open_inodes, &inode->elem);
@@ -217,7 +215,7 @@ inode_close (struct inode *inode)
           {
             free_map_release (inode->sector, 1);
             free_map_release (inode->file_start,
-                              bytes_to_sectors (inode->length)); 
+                              bytes_to_sectors (inode_length(inode))); 
           }
         free (inode);
         return;
@@ -343,9 +341,16 @@ inode_allow_write (struct inode *inode)
   lock_release (&inode->lock);
 }
 
-/* Returns the length, in bytes, of INODE's data. */
+/* Whenever accessing the inode length we need to update it on disk as well
+   becaue don't want disk to not have up to date inode length. Might as well
+   keep inode length as something stored on disk. */
 off_t
 inode_length (const struct inode *inode)
 {
-  return inode->length;
+  off_t inode_length;
+  struct cache_entry * cache_entry = cache_get_entry (inode->sector, R_SHARE);
+  struct inode_disk *data = (struct inode_disk *) cache_entry->data;
+  inode_length = data->length;
+  cache_release_entry (cache_entry, R_SHARE);
+  return inode_length;
 }

@@ -50,6 +50,7 @@ struct cache_entry *cache_add_sector (block_sector_t sector, bool new);
 void cache_read (block_sector_t sector, void *buffer, off_t size, off_t ofs);
 void cache_write (block_sector_t sector, const void *buffer, off_t size,
                   off_t ofs);
+void cache_release_entry (struct cache_entry *e, enum cache_use_type type);
 void cache_write_to_disk (bool filesys_done);
 
 #endif /* filesys/directory.h */

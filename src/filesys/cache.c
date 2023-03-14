@@ -21,11 +21,21 @@ static int cached_count;
 /* Filesystem device for filesys R/W. */
 extern struct block *fs_device;
 
+struct list read_ahead_queue;
+struct lock read_ahead_lock;
+struct condition read_ahead_cv;
+
 static struct cache_entry *cache_alloc (void);
 static struct cache_entry *evict_cache_entry (void);
 static void tick_clock_hand (void);
-static void read_ahead_fn (void *aux);
+static void read_ahead_fn (void *aux UNUSED);
 static void write_back_fn (void *aux UNUSED);
+
+struct r_ahead_entry 
+    {
+        block_sector_t sector;
+        struct list_elem list_elem;
+    };
 
 void
 cache_init (void)
@@ -53,8 +63,13 @@ cache_init (void)
             /* All other members initialized to 0. */
         }
 
+    list_init (&read_ahead_queue);
+    lock_init (&read_ahead_lock);
+    cond_init (&read_ahead_cv);
+
     /* Create the cleanup thread. */
     thread_create ("write_back", PRI_DEFAULT, write_back_fn, NULL);
+    thread_create ("read_ahead", PRI_DEFAULT, read_ahead_fn, NULL);
 }
 
 /* Reads SIZE bytes from cache entry for block sector SECTOR into BUFFER, 
@@ -65,13 +80,7 @@ cache_read (block_sector_t sector, void *buffer, off_t size, off_t ofs)
 {
     struct cache_entry *e = cache_get_entry (sector, R_SHARE);
     memcpy (buffer, e->data + ofs, size);
-    
-    /* Update metadata on completion of read. */
-    lock_acquire (&e->lock);
-    ASSERT (e->total_refs > 0);
-    if (--e->total_refs == 0)
-        cond_broadcast (&e->no_refs, &e->lock);
-    lock_release (&e->lock);
+    cache_release_entry (e, R_SHARE);
 }
 
 /* Writes SIZE bytes from BUFFER into cached block sector SECTOR, starting at 
@@ -82,16 +91,7 @@ cache_write (block_sector_t sector, const void *buffer, off_t size, off_t ofs)
 {
     struct cache_entry *e = cache_get_entry (sector, W_SHARE);
     memcpy (e->data + ofs, buffer, size);
-    
-    /* Update metadata on completion of read. */
-    lock_acquire (&e->lock);
-    e->dirty = true;
-    /* Signals to write-back thread that can start writing back. */
-    if (--e->write_refs == 0)
-        cond_signal (&e->no_writers, &e->lock);
-    if (--e->total_refs == 0)
-        cond_signal (&e->no_refs, &e->lock);
-    lock_release (&e->lock);
+    cache_release_entry (e, W_SHARE);
 }
 
 
@@ -123,7 +123,9 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type)
         {
             case (W_EXCL):
                 while (entry->total_refs != 0)
-                    cond_wait (&entry->no_refs, &entry->lock);
+                    {
+                        cond_wait (&entry->no_refs, &entry->lock);
+                    }
             case (W_SHARE):
                 entry->total_refs++;
                 entry->write_refs++;
@@ -134,15 +136,26 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type)
                 entry->accessed = true;
                 break;
             default:
-                if (!present)
-                    thread_create ("read_ahead", PRI_DEFAULT, read_ahead_fn,
-                                   (void *) (sector + 1));
+                break;
             /* Do nothing for READ AHEAD*/
+        }
+    
+    if (!present && type != R_AHEAD)
+        {
+            struct r_ahead_entry *e = malloc (sizeof (struct r_ahead_entry));
+            if (e != NULL)
+                {
+                    e->sector = sector + 1;
+                    lock_acquire (&read_ahead_lock);
+                    list_push_back (&read_ahead_queue, &e->list_elem);
+                    cond_signal (&read_ahead_cv, &read_ahead_lock);
+                    lock_release (&read_ahead_lock);
+                }
         }
     
     if (type != W_EXCL)
         lock_release (&entry->lock);
-    
+        
     return entry;
 }
 
@@ -261,6 +274,33 @@ evict_cache_entry (void)
     return NULL;
 }
 
+void
+cache_release_entry (struct cache_entry *e, enum cache_use_type type)
+{
+    switch(type)
+        {
+            case(W_SHARE):
+                lock_acquire (&e->lock);
+            case (W_EXCL):
+                e->dirty = true;
+                /* Gives priority to cleanup thread. */
+                if (--e->write_refs == 0)
+                    cond_signal (&e->no_writers, &e->lock);
+                if (--e->total_refs == 0)
+                    cond_signal (&e->no_refs, &e->lock);
+                lock_release (&e->lock);
+                break;
+            case (R_SHARE):
+                lock_acquire (&e->lock);
+                if (--e->total_refs == 0)
+                    cond_signal (&e->no_refs, &e->lock);
+                lock_release (&e->lock);
+                break;
+            default:
+                break;
+        }
+}
+
 /* Writes all dirty buffer cache entries to disk. If FILESYS_DONE flag set,
    frees memory associated with cached block after written back and then
    frees cache before returning. */
@@ -301,12 +341,24 @@ tick_clock_hand (void)
         clock_hand = cache_begin;
 }
 
-/* Reads block sector encoded in AUX into the cache. */
+/* Reads entry from the read ahead queue and reads entry into the buffer
+   cache. */
 static void
-read_ahead_fn (void *aux)
+read_ahead_fn (void *aux UNUSED)
 {
-    block_sector_t sector = (block_sector_t) aux;
-    cache_get_entry (sector, R_AHEAD);
+    while (true)
+        {
+            lock_acquire (&read_ahead_lock);
+            while (list_empty (&read_ahead_queue))
+                cond_wait (&read_ahead_cv, &read_ahead_lock);
+            
+            struct list_elem *e = list_pop_front (&read_ahead_queue);
+            lock_release (&read_ahead_lock);
+            struct r_ahead_entry *entry = list_entry (e, struct r_ahead_entry,
+                                                    list_elem);
+            cache_get_entry (entry->sector, R_AHEAD);
+            free (entry);
+        }
 }
 
 /* Periodically writes all dirty buffer cache entries to disk. */
