@@ -111,6 +111,7 @@ inode_create (block_sector_t sector, off_t length)
       struct cache_entry *cache_entry;
       cache_entry = cache_add_sector (sector, true);
       memcpy (cache_entry->data, &disk_inode, BLOCK_SECTOR_SIZE);
+      cache_entry->dirty = true;
       lock_release (&cache_entry->lock);
       if (sectors > 0) 
         {
@@ -121,6 +122,7 @@ inode_create (block_sector_t sector, off_t length)
             {
               cache_entry = cache_add_sector (disk_inode.start + i, true);
               memcpy (cache_entry->data, zeros, BLOCK_SECTOR_SIZE);
+              cache_entry->dirty = true;
               lock_release (&cache_entry->lock);
 
             }
