@@ -862,9 +862,7 @@ thread_close_fd (struct thread *t, int fd)
   if (fp == NULL)
     return;
   
-  lock_acquire (&filesys_lock);
   file_close (fp);
-  lock_release (&filesys_lock);
 
   t->fdtable[fd] = NULL;
 

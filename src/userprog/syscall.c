@@ -176,9 +176,7 @@ sys_remove (uint32_t *esp)
   if (fname == NULL)
     return false;
 
-  lock_acquire (&filesys_lock);
   ret = filesys_remove (fname);
-  lock_release (&filesys_lock);
   return ret;
 }
 
@@ -270,9 +268,7 @@ sys_read (uint32_t *esp)
         if (fp == NULL)
           return -1;
 
-        lock_acquire (&filesys_lock);
         bytes_read = file_read(fp, buffer, size);
-        lock_release (&filesys_lock);
     }
   
   return bytes_read;
@@ -316,9 +312,7 @@ sys_write (uint32_t *esp)
       if (fp == NULL) 
         return -1;
 
-      lock_acquire (&filesys_lock);
       bytes_written = file_write(fp, buffer, size);
-      lock_release (&filesys_lock);
     }
 
   return bytes_written;
