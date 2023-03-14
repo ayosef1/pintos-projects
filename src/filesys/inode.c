@@ -92,36 +92,36 @@ inode_init (void)
 bool
 inode_create (block_sector_t sector, off_t length)
 {
-  struct inode_disk disk_inode;
   bool success = false;
 
   ASSERT (length >= 0);
 
   /* If this assertion fails, the inode structure is not exactly
      one sector in size, and you should fix that. */
-  ASSERT (sizeof disk_inode == BLOCK_SECTOR_SIZE);
 
   // printf ("Trying to allocate sectors for file for inode %u\n", sector);
   size_t sectors = bytes_to_sectors (length);
-  disk_inode.length = length;
-  disk_inode.magic = INODE_MAGIC;
-  if (free_map_allocate (sectors, &disk_inode.start)) 
+  block_sector_t start;
+  if (free_map_allocate (sectors, &start)) 
     {
       // printf ("Allocated sector %u for file in inode w sector number %u\n", disk_inode->start, sector);
       struct cache_entry *cache_entry;
+      struct inode_disk *disk_inode;
+
       cache_entry = cache_add_sector (sector, true);
-      memcpy (cache_entry->data, &disk_inode, BLOCK_SECTOR_SIZE);
+      disk_inode = (struct inode_disk  *) cache_entry->data;
+      disk_inode->start = start;
+      disk_inode->length = length;
+      disk_inode->magic = INODE_MAGIC;
       cache_entry->dirty = true;
       lock_release (&cache_entry->lock);
       if (sectors > 0) 
         {
-          struct inode_disk zeros[1];
           size_t i;
           
           for (i = 0; i < sectors; i++)
             {
-              cache_entry = cache_add_sector (disk_inode.start + i, true);
-              memcpy (cache_entry->data, zeros, BLOCK_SECTOR_SIZE);
+              cache_entry = cache_add_sector (start + i, true);
               cache_entry->dirty = true;
               lock_release (&cache_entry->lock);
 
