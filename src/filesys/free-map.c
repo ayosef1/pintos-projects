@@ -43,7 +43,8 @@ free_map_allocate (size_t cnt, block_sector_t *sectorp)
             }
           return false;
         }
-      sectorp[i] = sector;
+      /* Put in reverse order. */
+      sectorp[cnt - i -1] = sector;
     }
   return true;
 }
