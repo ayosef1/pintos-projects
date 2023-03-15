@@ -31,14 +31,15 @@ struct condition read_ahead_cv;
 static struct cache_entry *cache_alloc (void);
 static struct cache_entry *evict_cache_entry (void);
 static void tick_clock_hand (void);
+static void push_read_ahead_queue (block_sector_t);
 static void read_ahead_fn (void *aux UNUSED);
 static void write_back_fn (void *aux UNUSED);
 
-/* Entry in the read ahead queue. */
+/* Entry in read ahead queue. */
 struct r_ahead_entry 
     {
-        block_sector_t sector;
-        struct list_elem list_elem;
+        block_sector_t sector;                  /* Sector to read ahead. */
+        struct list_elem list_elem;             /* Read ahead queue elem. */
     };
 
 void
@@ -76,29 +77,6 @@ cache_init (void)
     thread_create ("read_ahead", PRI_DEFAULT, read_ahead_fn, NULL);
 }
 
-/* Reads SIZE bytes from cache entry for block sector SECTOR into BUFFER, 
-   starting at position OFS. Updates corresponding cache entry metadata,
-   including loading sector into cache if not present. */
-void
-cache_read (block_sector_t sector, void *buffer, off_t size, off_t ofs)
-{
-    struct cache_entry *e = cache_get_entry (sector, R_SHARE);
-    memcpy (buffer, e->data + ofs, size);
-    cache_release_entry (e, R_SHARE);
-}
-
-/* Writes SIZE bytes from BUFFER into cached block sector SECTOR, starting at 
-   position OFS. Updates corresponding cache entry metadata, including
-   loading sector into cache if not present. */
-void
-cache_write (block_sector_t sector, const void *buffer, off_t size, off_t ofs)
-{
-    struct cache_entry *e = cache_get_entry (sector, W_SHARE);
-    memcpy (e->data + ofs, buffer, size);
-    cache_release_entry (e, W_SHARE);
-}
-
-
 
 /* Returns a cache entry corresponding to SECTOR loading from disk if 
    not already present. Increments the cache entry's write_cnt if WRITE flag 
@@ -107,6 +85,11 @@ cache_write (block_sector_t sector, const void *buffer, off_t size, off_t ofs)
 struct cache_entry *
 cache_get_entry (block_sector_t sector, enum cache_use_type type)
 {
+    /* Return a new entry. */
+    if (type == NEW)
+        return cache_add_sector (sector, true);
+    
+    /* Seach cache if present. */
     struct cache_entry *entry;
     bool present = false;
     for (entry = cache_begin; entry < cache_end; entry++)
@@ -127,9 +110,7 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type)
         {
             case (W_EXCL):
                 while (entry->total_refs != 0)
-                    {
-                        cond_wait (&entry->no_refs, &entry->lock);
-                    }
+                    cond_wait (&entry->no_refs, &entry->lock);
             case (W_SHARE):
                 entry->total_refs++;
                 entry->write_refs++;
@@ -141,21 +122,11 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type)
                 break;
             default:
                 break;
-            /* Do nothing for READ AHEAD*/
         }
     
+    /* Read ahead if it isn't present and not already reading ahead. */
     if (!present && type != R_AHEAD)
-        {
-            struct r_ahead_entry *e = malloc (sizeof (struct r_ahead_entry));
-            if (e != NULL)
-                {
-                    e->sector = sector + 1;
-                    lock_acquire (&read_ahead_lock);
-                    list_push_back (&read_ahead_queue, &e->list_elem);
-                    cond_signal (&read_ahead_cv, &read_ahead_lock);
-                    lock_release (&read_ahead_lock);
-                }
-        }
+        push_read_ahead_queue (sector  + 1);
     
     if (type != W_EXCL)
         lock_release (&entry->lock);
@@ -300,6 +271,8 @@ cache_release_entry (struct cache_entry *e, enum cache_use_type type)
                     cond_signal (&e->no_refs, &e->lock);
                 lock_release (&e->lock);
                 break;
+            case (NEW):
+                lock_release (&e->lock);
             default:
                 break;
         }
@@ -343,6 +316,20 @@ tick_clock_hand (void)
 {
     if (++clock_hand == cache_end)
         clock_hand = cache_begin;
+}
+
+static void
+push_read_ahead_queue (block_sector_t sector)
+{
+    struct r_ahead_entry *e = malloc (sizeof (struct r_ahead_entry));
+    if (e != NULL)
+        {
+            e->sector = sector + 1;
+            lock_acquire (&read_ahead_lock);
+            list_push_back (&read_ahead_queue, &e->list_elem);
+            cond_signal (&read_ahead_cv, &read_ahead_lock);
+            lock_release (&read_ahead_lock);
+        }
 }
 
 /* Reads entry from the read ahead queue and reads entry into the buffer

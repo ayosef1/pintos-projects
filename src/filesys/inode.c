@@ -39,8 +39,8 @@ static void inode_update_length (struct inode *inode, off_t write_end);
 static off_t ofs_to_indicies (off_t ofs, off_t *indicies);
 static block_sector_t get_read_block (block_sector_t inode_sector,
                                       off_t offset);
-static block_sector_t get_write_block (block_sector_t inode_sector,
-                                       off_t offset);
+static block_sector_t get_data_sector (block_sector_t inode_sector,
+                                       off_t offset, bool read);
 
 /* Returns the number of sectors to allocate for an inode SIZE
    bytes long. */
@@ -110,17 +110,17 @@ inode_init (void)
 bool
 inode_create (block_sector_t sector, off_t length, bool is_file)
 {
-  struct cache_entry *cache_entry;
+  struct cache_entry *inode_entry;
   struct inode_disk *disk_inode;
 
   ASSERT (length >= 0);
-  cache_entry = cache_add_sector (sector, true);
-  disk_inode = (struct inode_disk  *) cache_entry->data;
+  inode_entry = cache_get_entry (sector, NEW);
+  disk_inode = (struct inode_disk  *) inode_entry->data;
   disk_inode->length = length;
   disk_inode->magic = INODE_MAGIC;
   disk_inode->is_file = is_file;
-  cache_entry->dirty = true;
-  lock_release (&cache_entry->lock);
+  inode_entry->dirty = true;
+  cache_release_entry (inode_entry, NEW);
   return true;
 }
 
@@ -250,7 +250,7 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
       if (chunk_size <= 0)
         break;
       
-      block_sector_t sector_idx = get_read_block (inode->sector, offset);
+      block_sector_t sector_idx = get_data_sector (inode->sector, offset, true);
       if (sector_idx == 0)
           memset(buffer + bytes_read, 0, chunk_size);
       else
@@ -304,7 +304,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
         break;
 
       enum cache_use_type type;
-      block_sector_t sector_id = get_write_block (inode->sector, offset);
+      block_sector_t sector_id = get_data_sector (inode->sector, offset, false);
       if (sector_id == 0)
         break;
       
@@ -466,41 +466,15 @@ set_block_ptr (void *block, off_t block_ofs, block_sector_t sector,
     }
 }
 
-/* Return the block number of the block holds the byte at offset OFFSET
+/* Return the block number of the block that holds the byte at offset OFFSET
    in the data represented by the inode that lives at sector INODE_SECTOR.
-   Returns 0 if byte's block hasn't been written yet. */
-static block_sector_t
-get_read_block (block_sector_t inode_sector, off_t offset)
-{
-  off_t indicies[MAX_INDICIES];
-  off_t num_indicies = ofs_to_indicies (offset, indicies);
-
-  int cur_depth = 0;
-  struct cache_entry *cur = cache_get_entry (inode_sector,
-                                             R_SHARE);
-  block_sector_t child_sector = get_block_ptr (cur->data, indicies[cur_depth],
-                                               true);
-  cache_release_entry (cur, R_SHARE);
-
-  while (cur_depth < num_indicies - 1 && child_sector != 0)
-    {
-      cur = cache_get_entry (child_sector, R_SHARE);
-
-      /* Advance. */
-      cur_depth++;
-      child_sector = get_block_ptr (cur->data, indicies[cur_depth], false);
-      cache_release_entry (cur, R_SHARE);
-    }
-  return child_sector;
-}
-
-/* Return the block number of the block holds the byte at offset OFFSET
-   in the data represented by the inode that lives at sector INODE_SECTOR.
-   Allocates each block needed if not yet allocated.
    
-   If block was allocated, sets the cache use type to W_EXCL. */
+   Flag READ determines what to do when a block is found to be unallocated.
+   If READ is true, then 0 is returned.
+   If READ is false, the data block and the relevant indirect blocks not
+   yet allocated are allocated. */
 static block_sector_t
-get_write_block (block_sector_t inode_sector, off_t offset)
+get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
 {
   off_t indicies[MAX_INDICIES];
   off_t num_indicies = ofs_to_indicies (offset, indicies);
@@ -511,8 +485,8 @@ get_write_block (block_sector_t inode_sector, off_t offset)
                                              R_SHARE);
 
   block_sector_t child_sector = get_block_ptr (cur->data, indicies[cur_depth],
-                                               true);
-  cache_release_entry (cur, R_SHARE);
+                                    true);
+      cache_release_entry (cur, R_SHARE);
 
   /* Iterate through the indicies to get the data block number. */
   while (cur_depth < num_indicies - 1 && child_sector != 0)
@@ -525,59 +499,58 @@ get_write_block (block_sector_t inode_sector, off_t offset)
       child_sector = get_block_ptr (cur->data, indicies[cur_depth], false);
       cache_release_entry (cur, R_SHARE);
     }
+    
+  if (read)
+    return child_sector;
 
-  /* One of the indirect blocks or the data block was not present.
-     Allocate new blocks and updates the parent indexes for each allocated
-     block. */
-  if (child_sector == 0)
+  /* If all blocks allocated, return the found sector. */
+  if (child_sector != 0)
+    return child_sector;
+
+  /* Get the necessary free blocks from free map. */
+  int num_to_create = num_indicies - cur_depth;
+  block_sector_t new_sectors[num_to_create];
+  if (!free_map_allocate (num_to_create, new_sectors))
+      return 0;
+
+  /* First allocated block given to data. */
+  int num_created = 0;
+  block_sector_t data_sector = new_sectors[0];
+  struct cache_entry *data_entry;
+  data_entry = cache_add_sector (data_sector,
+                                 true);
+  lock_release (&data_entry->lock);
+  num_created++;
+
+  /* Create parent block and write in the appropriate entry.
+      Start from lowest depth to so satisfy the recoverability criteria. */
+  int parent_depth = num_indicies - num_created;
+  struct cache_entry *parent_entry;
+  while (parent_depth > cur_depth)
     {
-      /* Get the necessary free blocks from free map. */
-      int num_to_create = num_indicies - cur_depth;
-      block_sector_t new_sectors[num_to_create];
-      if (!free_map_allocate (num_to_create, new_sectors))
-          return 0;
-        
-
-      /* First allocated block given to data. */
-      int num_created = 0;
-      block_sector_t write_sector = new_sectors[num_created];
-      struct cache_entry *data_entry;
-      data_entry = cache_add_sector (write_sector,
-                                     true);
-      lock_release (&data_entry->lock);
-      num_created++;
-
-      /* Create parent block and write in the appropriate entry.
-         Start from lowest depth to so satisfy the recoverability criteria. */
-      int parent_depth = num_indicies - num_created;
-      struct cache_entry *parent_entry;
-      while (parent_depth > cur_depth)
-        {
-          block_sector_t parent_sector = new_sectors[num_created];
-          parent_entry = cache_add_sector (parent_sector,
-                                           true);
-          set_block_ptr (parent_entry->data, indicies[parent_depth],
-                          new_sectors[num_created - 1], false);
-          // printf ("NEW INDIRECT %u points to BLOCK %u at index %d\n", parent_sector, new_sectors[num_created - 1], indicies[parent_depth]);
-
-          lock_release (&parent_entry->lock);
-          parent_depth--;
-          num_created++;
-        }
-
-      /* Last case. If parent_depth == 0, inode, different logic to set ptr.
-         Exclusive lock needed because the block exists already. */
-      bool cur_is_inode = parent_depth == 0;
-      // printf ("FINAL: %s %u points to BLOCK %u at index %d\n",
-      //         cur_is_inode ? "INODE" : "INDIRECT", cur_sector, new_sectors[num_created - 1], indicies[parent_depth]);
-      parent_entry = cache_get_entry (cur_sector, W_EXCL);
+      block_sector_t parent_sector = new_sectors[num_created];
+      parent_entry = cache_add_sector (parent_sector,
+                                        true);
       set_block_ptr (parent_entry->data, indicies[parent_depth],
-                     new_sectors[num_created - 1],
-                     cur_is_inode);
-      cache_release_entry (parent_entry, W_EXCL);
-        
-      return write_sector;
+                      new_sectors[num_created - 1], false);
+      // printf ("NEW INDIRECT %u points to BLOCK %u at index %d\n", parent_sector, new_sectors[num_created - 1], indicies[parent_depth]);
+
+      lock_release (&parent_entry->lock);
+      parent_depth--;
+      num_created++;
     }
-  return child_sector;
+
+  /* Last case. If parent_depth == 0, inode, different logic to set ptr.
+      Exclusive lock needed because the block exists already. */
+  bool parent_is_inode = parent_depth == 0;
+  // printf ("FINAL: %s %u points to BLOCK %u at index %d\n",
+  //         cur_is_inode ? "INODE" : "INDIRECT", cur_sector, new_sectors[num_created - 1], indicies[parent_depth]);
+  parent_entry = cache_get_entry (cur_sector, W_EXCL);
+  set_block_ptr (parent_entry->data, indicies[parent_depth],
+                  new_sectors[num_to_create - 1],
+                  parent_is_inode);
+  cache_release_entry (parent_entry, W_EXCL);
+    
+  return data_sector;
 }
 

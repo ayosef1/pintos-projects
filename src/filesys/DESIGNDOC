@@ -60,6 +60,23 @@ currently cached.
 >> A2: What is the maximum size of a file supported by your inode
 >> structure?  Show your work.
 
+128 indexes per block.
+122 direct indexes in inode
+1 singly indirect index in inode
+1 doublly indirect index in inode
+
+Direct = 1 block pointer => 512B
+Singly indirect = 128 direct => 64kB
+Doubly indirecty = 128 singly direct => 8MB
+
+In total
+(122 * 512) + (128 * 512) + (128 * 128 * 512)
+This comes out to:
+8.12 MB
+8317 KB
+8516608 B
+
+
 ---- SYNCHRONIZATION ----
 
 >> A3: Explain how your code avoids a race if two processes attempt to
@@ -86,6 +103,21 @@ currently cached.
 >> indirect blocks?  If not, why did you choose an alternative inode
 >> structure, and what advantages and disadvantages does your
 >> structure have, compared to a multilevel index?
+
+We implemented a multilevel index with as many direct blocks as possible
+with room for one indirect and one doubly indirect (witin the 512B block limit).
+The doubly indirect was necessary in order to meet allow for 8MB files
+criteria. We chose to maximise the number of direct in order increase the 
+threshold of file size, beyond which indirect indexing (and therefore more disk
+accesses) are necessary. Most "small files" are smaller than 64KB (approximately
+the number of bytes that can be indexed directly in our design). The reason we
+chose to have only one indirect index was to balance the trade off of maximising
+direct, but also wanting to allow for files of medium size ~64 - 128KB to not
+require double indexing (and so more disk access). Hence we include one singly
+indirect index.
+
+This was supported
+by similar design choices made by Unix in their filesystem.
 
                 SUBDIRECTORIES
                 ==============
@@ -156,6 +188,14 @@ struct cache_entry
                                            entry metadata. */  
         uint8_t *data;                  /* Actual cached sector. */
     };
+
+New data structure to represent entry in the read ahead queue
+
+    struct r_ahead_entry 
+        {
+            block_sector_t sector;                  /* Sector to read ahead. */
+            struct list_elem list_elem;             /* Read ahead queue elem. */
+        };
 
 Static members of cache.c:
 
