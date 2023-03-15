@@ -21,8 +21,11 @@ static int cached_count;
 /* Filesystem device for filesys R/W. */
 extern struct block *fs_device;
 
+/* Queue of sectors to be read ahead by the read ahead thread. */
 struct list read_ahead_queue;
+/* Sync for read_ahead_queue. */
 struct lock read_ahead_lock;
+/* CV to put read ahead thread to sleep if no sectors to read. */
 struct condition read_ahead_cv;
 
 static struct cache_entry *cache_alloc (void);
@@ -31,6 +34,7 @@ static void tick_clock_hand (void);
 static void read_ahead_fn (void *aux UNUSED);
 static void write_back_fn (void *aux UNUSED);
 
+/* Entry in the read ahead queue. */
 struct r_ahead_entry 
     {
         block_sector_t sector;
