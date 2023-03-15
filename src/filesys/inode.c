@@ -18,7 +18,7 @@
 #define DOUBLE_INDIRECT_INDEX NUM_DIRECT_POINTERS + 1
 #define NUM_BLOCK_POINTERS 124
 #define POINTERS_PER_BLOCK  128
-#define NUM_INDICIES 3
+#define MAX_INDICIES 3
 #define MAX_FILE_BYTES (NUM_DIRECT_POINTERS + NUM_BLOCK_POINTERS + \
                         NUM_BLOCK_POINTERS * NUM_BLOCK_POINTERS)   \
                         * BLOCK_SECTOR_SIZE                        \
@@ -400,6 +400,23 @@ ofs_to_indicies (off_t ofs, off_t *indicies)
 
 /* Set the block pointer at offset BLOCK_OFS in block sector BLOCK to
    SECTOR. */
+static block_sector_t
+get_block_ptr (void *block, off_t block_ofs, bool inode)
+{
+  if (inode)
+    {
+      struct inode_disk *disk_inode = (struct inode_disk *) block;
+      return disk_inode->blocks[block_ofs];
+    }
+  else
+    {
+      block_sector_t *blocks = (block_sector_t *) block;
+      return blocks[block_ofs];
+    }
+}
+
+/* Set the block pointer at offset BLOCK_OFS in block sector BLOCK to
+   SECTOR. */
 static void
 set_block_ptr (void *block, off_t block_ofs, block_sector_t sector,
                bool inode)
@@ -421,27 +438,25 @@ set_block_ptr (void *block, off_t block_ofs, block_sector_t sector,
 static block_sector_t
 get_read_block (block_sector_t inode_sector, off_t offset)
 {
-  off_t indicies[NUM_INDICIES];
+  off_t indicies[MAX_INDICIES];
   off_t num_indicies = ofs_to_indicies (offset, indicies);
 
+  int cur_depth = 0;
   struct cache_entry *cur = cache_get_entry (inode_sector,
-                                              R_SHARE);
-  struct inode_disk *disk_inode = (struct inode_disk *) cur->data;
-  block_sector_t child_sector = disk_inode->blocks[indicies[0]];
+                                             R_SHARE);
+  block_sector_t child_sector = get_block_ptr (cur->data, indicies[cur_depth],
+                                               true);
+  cache_release_entry (cur, R_SHARE);
 
-
-  int index = 0;
-  while (index < num_indicies - 1 && child_sector != 0)
+  while (cur_depth < num_indicies - 1 && child_sector != 0)
     {
-      cache_release_entry (cur, R_SHARE);
       cur = cache_get_entry (child_sector, R_SHARE);
 
       /* Advance. */
-      index++;
-      child_sector = (block_sector_t) cur->data[indicies[index] *
-                                                    sizeof (block_sector_t)];
+      cur_depth++;
+      child_sector = get_block_ptr (cur->data, indicies[cur_depth], false);
+      cache_release_entry (cur, R_SHARE);
     }
-  cache_release_entry (cur, R_SHARE);
   return child_sector;
 }
 
@@ -449,7 +464,7 @@ static block_sector_t
 get_write_block (block_sector_t inode_sector, off_t offset,
                  enum cache_use_type *type)
 {
-  off_t indicies[NUM_INDICIES];
+  off_t indicies[MAX_INDICIES];
   off_t num_indicies = ofs_to_indicies (offset, indicies);
 
   int cur_depth = 0;
@@ -462,14 +477,8 @@ get_write_block (block_sector_t inode_sector, off_t offset,
   cache_release_entry (cur, R_SHARE);
 
 
-  while (cur_depth < num_indicies - 1)
+  while (cur_depth < num_indicies - 1 && child_sector != 0)
     {
-      /* If child is zero need to allocate the blocks at depth below
-         the current block. */
-      if (child_sector == 0)
-        break;
-
-      /* Advance. */
       cur = cache_get_entry (child_sector, R_SHARE);
       cur_sector = child_sector;
 
