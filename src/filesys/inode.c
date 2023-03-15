@@ -28,7 +28,6 @@
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk
   {
-    block_sector_t start;               /* First data sector. */
     off_t length;                       /* File size in bytes. */
     /* TODO: remove NUM_BLOCK_POINTERS. */
     block_sector_t blocks [NUM_BLOCK_POINTERS];
@@ -40,7 +39,8 @@ static off_t ofs_to_indicies (off_t ofs, off_t *indicies);
 static block_sector_t get_read_block (block_sector_t inode_sector,
                                       off_t offset);
 static block_sector_t get_write_block (block_sector_t inode_sector,
-                                       off_t offset);
+                                       off_t offset,
+                                       enum cache_use_type *type);
 
 /* Returns the number of sectors to allocate for an inode SIZE
    bytes long. */
@@ -107,7 +107,7 @@ inode_create (block_sector_t sector, off_t length, bool is_file)
   ASSERT (length >= 0);
   cache_entry = cache_add_sector (sector, true);
   disk_inode = (struct inode_disk  *) cache_entry->data;
-  disk_inode->length = 0;
+  disk_inode->length = length;
   disk_inode->magic = INODE_MAGIC;
   disk_inode->is_file = is_file;
   cache_entry->dirty = true;
@@ -293,15 +293,21 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       if (chunk_size <= 0)
         break;
 
-      block_sector_t sector_id = get_write_block (inode->sector, offset);
+      enum cache_use_type type;
+      block_sector_t sector_id = get_write_block (inode->sector, offset, &type);
       if (sector_id == 0)
         break;
       
+      /* Logic to make sure that if extending but in the final sector
+         to get an exclusive lock. */
+      if (offset + chunk_size > inode_length(inode))
+        type = W_EXCL;
+      
       // printf("<6>\n");
-      struct cache_entry *cache_entry = cache_get_entry (sector_id, W_SHARE);
+      struct cache_entry *cache_entry = cache_get_entry (sector_id, type);
       memcpy (cache_entry->data + sector_ofs, buffer + bytes_written,
               chunk_size);
-      cache_release_entry (cache_entry, W_SHARE);
+      cache_release_entry (cache_entry, type);
       // printf("<7>\n");
 
 
@@ -440,7 +446,8 @@ get_read_block (block_sector_t inode_sector, off_t offset)
 }
 
 static block_sector_t
-get_write_block (block_sector_t inode_sector, off_t offset)
+get_write_block (block_sector_t inode_sector, off_t offset,
+                 enum cache_use_type *type)
 {
   off_t indicies[NUM_INDICIES];
   off_t num_indicies = ofs_to_indicies (offset, indicies);
@@ -474,6 +481,7 @@ get_write_block (block_sector_t inode_sector, off_t offset)
 
   if (child_sector == 0)
     {
+      *type = W_EXCL;
       /* Get the necessary free blocks from free map. */
       int num_to_create = num_indicies - cur_depth;
       block_sector_t new_sectors[num_to_create];
@@ -525,7 +533,7 @@ get_write_block (block_sector_t inode_sector, off_t offset)
       // printf ("Write SECTOR: %u\n", write_sector);
       return write_sector;
     }
-  
+  *type = W_SHARE;
   return child_sector;
 }
 
