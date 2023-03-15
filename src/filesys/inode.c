@@ -37,8 +37,6 @@ struct inode_disk
 
 static void inode_update_length (struct inode *inode, off_t write_end);
 static off_t ofs_to_indicies (off_t ofs, off_t *indicies);
-static block_sector_t get_read_block (block_sector_t inode_sector,
-                                      off_t offset);
 static block_sector_t get_data_sector (block_sector_t inode_sector,
                                        off_t offset, bool read);
 
@@ -466,6 +464,40 @@ set_block_ptr (void *block, off_t block_ofs, block_sector_t sector,
     }
 }
 
+/* Allocate and initalize new sectors with sector numbers in NEW_SECTORS.
+   Start with the data block at START_DEPTH and move upwards until the parent
+   of the newly allocated block is at STOP DEPTH.  */
+static void
+allocate_new_blocks (block_sector_t *new_sectors, off_t *indicies,
+                     off_t start_depth, off_t stop_depth)
+{
+  struct cache_entry *parent_entry;
+  block_sector_t *parent_sector;
+  block_sector_t *child_sector = new_sectors;
+  int parent_depth = start_depth;
+
+  struct cache_entry *data_entry = cache_get_entry (*new_sectors, NEW);
+  cache_release_entry (data_entry, NEW);
+  parent_depth--;
+  new_sectors++;
+
+  /* Create parent block and write in the appropriate entry.
+      Start from lowest depth to so satisfy the recoverability criteria. */
+  while (parent_depth > stop_depth)
+    {
+      parent_sector = new_sectors;
+      parent_entry = cache_get_entry (*parent_sector, NEW);
+      set_block_ptr (parent_entry->data, indicies[parent_depth],
+                     *child_sector, false);
+      // printf ("NEW INDIRECT %u points to BLOCK %u at index %d\n", parent_sector, new_sectors[num_created - 1], indicies[parent_depth]);
+
+      cache_release_entry (parent_entry, NEW);
+      child_sector = parent_sector;
+      parent_depth--;
+      new_sectors++;
+    }
+}
+
 /* Return the block number of the block that holds the byte at offset OFFSET
    in the data represented by the inode that lives at sector INODE_SECTOR.
    
@@ -514,42 +546,20 @@ get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
       return 0;
 
   /* First allocated block given to data. */
-  int num_created = 0;
   block_sector_t data_sector = new_sectors[0];
-  struct cache_entry *data_entry;
-  data_entry = cache_add_sector (data_sector,
-                                 true);
-  lock_release (&data_entry->lock);
-  num_created++;
 
-  /* Create parent block and write in the appropriate entry.
-      Start from lowest depth to so satisfy the recoverability criteria. */
-  int parent_depth = num_indicies - num_created;
-  struct cache_entry *parent_entry;
-  while (parent_depth > cur_depth)
-    {
-      block_sector_t parent_sector = new_sectors[num_created];
-      parent_entry = cache_add_sector (parent_sector,
-                                        true);
-      set_block_ptr (parent_entry->data, indicies[parent_depth],
-                      new_sectors[num_created - 1], false);
-      // printf ("NEW INDIRECT %u points to BLOCK %u at index %d\n", parent_sector, new_sectors[num_created - 1], indicies[parent_depth]);
-
-      lock_release (&parent_entry->lock);
-      parent_depth--;
-      num_created++;
-    }
+  allocate_new_blocks (new_sectors, indicies, num_indicies, cur_depth);
 
   /* Last case. If parent_depth == 0, inode, different logic to set ptr.
       Exclusive lock needed because the block exists already. */
-  bool parent_is_inode = parent_depth == 0;
+  bool cur_is_inode = cur_depth == 0;
   // printf ("FINAL: %s %u points to BLOCK %u at index %d\n",
   //         cur_is_inode ? "INODE" : "INDIRECT", cur_sector, new_sectors[num_created - 1], indicies[parent_depth]);
-  parent_entry = cache_get_entry (cur_sector, W_EXCL);
-  set_block_ptr (parent_entry->data, indicies[parent_depth],
+  cur = cache_get_entry (cur_sector, W_EXCL);
+  set_block_ptr (cur->data, indicies[cur_depth],
                   new_sectors[num_to_create - 1],
-                  parent_is_inode);
-  cache_release_entry (parent_entry, W_EXCL);
+                  cur_is_inode);
+  cache_release_entry (cur, W_EXCL);
     
   return data_sector;
 }

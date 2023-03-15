@@ -169,6 +169,7 @@ by similar design choices made by Unix in their filesystem.
 
 Added new data structure to represent cache entries.
 
+/* An entry in the buffer cache. */
 struct cache_entry
     {
         block_sector_t sector;          /* Block sector represented. */
@@ -179,15 +180,25 @@ struct cache_entry
                                            back. */
         bool allocated;                 /* Whether cache_entry has been 
                                            allocated. */
-        
-        `no_writers` condition variable ensures that no thread is writing to 
-        cached block sector when write back is happening. Signalled when
-        `write_refs` is decremented to 0.
-        struct condition no_writers;
+        struct condition no_writers;    /* For write back, signal when 
+                                           write_refs decremented to zero. */
+        struct condition no_refs;       /* For eviction, when on*/
         struct lock lock;               /* Lock to synchronize access to cache
                                            entry metadata. */  
         uint8_t *data;                  /* Actual cached sector. */
     };
+
+Added new enum to represent different  use types that determine how to 
+synchronize access to the cache entry on a call to cache_get_entry:
+
+    enum cache_use_type
+        {
+            W_EXCL,                         /* Exclusive write. */
+            W_SHARE,                        /* Non exclusive write. */
+            R_SHARE,                        /* Read of data. */
+            R_AHEAD,                        /* Read ahead. */
+            NEW                             /* Use type. */
+        };
 
 New data structure to represent entry in the read ahead queue
 
@@ -199,11 +210,11 @@ New data structure to represent entry in the read ahead queue
 
 Static members of cache.c:
 
-    Synchronization when loading block sector into cache for race between
+    /* Synchronization when loading block sector into cache for race between
     two processes that both can't find block sector in cache. Prevents double
-    loading of that block sector.
+    loading of that block sector. */
 
-        static struct lock get_new_lock;
+    static struct lock get_new_lock;
 
     /* Block Cache Begin. */
     static struct cache_entry *cache_begin;
@@ -215,6 +226,13 @@ Static members of cache.c:
     static int cached_count;
     /* Filesystem device for filesys R/W. */
     extern struct block *fs_device;
+
+    /* Queue of sectors to be read ahead by the read ahead thread. */
+    struct list read_ahead_queue;
+    /* Sync for read_ahead_queue. */
+    struct lock read_ahead_lock;
+    /* CV to put read ahead thread to sleep if no sectors to read. */
+    struct condition read_ahead_cv;
 
 
 ---- ALGORITHMS ----
@@ -235,11 +253,14 @@ entry is not considered for eviction.
 The clock hand is initialized (at boot) to point to the first
 entry in the buffer cache. During eviction, the algorithm acquires the lock
 for the entry that the clock hand is pointing to. If the entry is not allocated
-or is in use (`total_refs` > 0) the lock on the entry is released and the clock
-hand proceeds. Next the accessed flag is checked. If it is set, it is set to
-0 and the clock hand procceeds (once the lock is dropped). Otherwise that cache
-entry is chosen for eviction and the clock hand is incremented by one for the
-next eviciton.
+the lock on the entry is released and the clock hand proceeds. 
+Next the eviction algorithm waits on the total_refs of the cache entry to go
+to zero using a condition variable. This is to ensure fairness of the clock
+algorithm (i.e. no pinning as before).
+
+Next the accessed flag is checked. If it is set, it is set to 0 and the clock 
+hand procceeds (once the lock is dropped). Otherwise that cache entry is chosen
+for eviction and the clock hand is incremented by one for the next eviciton.
 
 If an entry isnt' selected after two loops of the circular buffer cache, then
 the eviction algorithm stops and NULL is returned. Two loops chosen to handle
@@ -270,17 +291,23 @@ frees the entire buffer cache.
 
 >> C4: Describe your implementation of read-ahead.
 
-Whenever a block sector is read in from disk into the buffer cache, the next
-block sector is read into the buffer cache asynchronously by a new thread that
-is diven default priority (31). The `read-ahead` thread checks if the thread is
-already in the buffer cache, if it is it does nothing and exits.
 
-If the next block sector isn't in the cache it loads it from disk (evicting if
-necessary). Note that entries added to the buffer cache by `read-ahead` are
-initialized differently. Specifically, their accessed flag is set to 0 and
-its `total_refs` is not incremented. This is because a block sector read ahead
-isn't actively needed by a thread, it is pre-emptive and so these entries 
-should be available for eviciton if necessary.
+Whenever a block sector is read in from disk into the buffer cache, the next
+block sector is read into the buffer cache asynchronously by adding the block
+to the `read_ahead_queue`. This queue is read from by the `read-ahead` thread
+that is created on boot when the buffer cache is initialized.
+
+Adding to and removing from the read ahead queue is synchonized through
+the condition variable `read_queue_cv` and the lock `read_queue_lock`. Adding
+to the read ahead queue requires acquiring the `read_queue_lock`. Similarly,
+whenever an entry is added the condition variable is signaled to tell the
+`read-ahead` thread that it has an entry to put on the list. Similarly, the read
+ahead thread loops on the read_ahead queue, acquiring the lock and waiting on 
+the condition variable if there are no entries in the queue.
+
+Note to ensure fairness the read ahead thread is given default priority (31) 
+and it only reasons one entry at a time to prevent starvation of processes
+trying to add to the queue.
 
 
 ---- SYNCHRONIZATION ----
@@ -300,9 +327,10 @@ that the `total_refs` is non-zero.
 
 Correspondingly, during eviction, when process B is deciding whether to evict
 a block from the cache it first acquires the cache lock and inspects its
-`total_refs` member. If this member is non-zero, it does not consider the entry
-for eviction. This means that blocks that are being actively written to or read
-from i.e. `total_refs` is non zero, will never be selected for eviction.
+`total_refs` member. If this member is non-zero, it blocks on the condition
+variable `no_refs` until `total_refs` is zero. This means that blocks that are
+being actively written to or read from i.e. `total_refs` is non zero, are never
+evicted.
 
 >> C6: During the eviction of a block from the cache, how are other
 >> processes prevented from attempting to access the block?
@@ -322,6 +350,37 @@ released).
 
 >> C7: Describe a file workload likely to benefit from buffer caching,
 >> and workloads likely to benefit from read-ahead and write-behind.
+
+Buffer caching:
+    
+Iterating through a large file would significanly benefit from buffer
+caching as it would allow the inode (and relevant singly and doubly indirect
+blocks) to remain in the buffer cache. This would significantly speed up
+indexing by reducing the number of disk accesses required to index into the
+correct block.
+
+Another example is performing several reads of the same small section of a file,
+for example a small file that can fit in the buffer cache. This prevents
+the number of N - 1 disk accesses, where N is the number of accesses.
+Multiple processes reading the same segement of a file concurrently / in 
+parallel would also hugely benefit from this.
+
+
+Read Ahead:
+
+Similar to the above case, reading an entire file from start to finish. Process
+A that wants to read the file doesn't have to block on I/O with read ahead.
+Instead, disk retrieval is offloaded to the read ahead thread, meaing CPU 
+ultilization can be increased as reading from disk and CPU execution can happen
+in parallel.
+
+Write Behind:
+
+Any process that is frequently writing to the same section of a file will
+benefit from write back. Updates to the file can happen in memory and not
+require reading from disk and writing through each time a single write is
+performed. Only when the block hasn't been written to for a long time is
+the block written back, writing several updates to disk with one disk write.
 
                SURVEY QUESTIONS
                ================

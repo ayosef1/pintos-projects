@@ -273,6 +273,7 @@ cache_release_entry (struct cache_entry *e, enum cache_use_type type)
                 break;
             case (NEW):
                 lock_release (&e->lock);
+                break;
             default:
                 break;
         }
