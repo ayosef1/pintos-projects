@@ -173,7 +173,8 @@ filesys_mkdir (const char *dir)
 
   bool success = (parent_dir != NULL
                   && free_map_allocate (1, &inode_sector)
-                  && dir_create (inode_sector, parent_dir_sector, 16)
+                  && dir_create (inode_sector, parent_dir_sector,
+                                 INITIAL_DIRENTS)
                   && dir_add (parent_dir, dirname, inode_sector));
   if (!success && inode_sector != 0) 
     free_map_release (inode_sector);
@@ -190,7 +191,7 @@ do_format (void)
 {
   printf ("Formatting file system...");
   free_map_create ();
-  if (!dir_create (ROOT_DIR_SECTOR, ROOT_DIR_SECTOR, 16))
+  if (!dir_create (ROOT_DIR_SECTOR, ROOT_DIR_SECTOR, INITIAL_DIRENTS))
     PANIC ("root directory creation failed");
   free_map_close ();
   printf ("done.\n");
