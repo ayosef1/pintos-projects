@@ -220,8 +220,11 @@ split_path (const char *path, char **parent_dir_path, char **dirent)
   /* Case 2: any path in format a/b/... or /a/b/... */
   else if ((last_slash = strrchr (path, '/')) != NULL)
   {
-    int dirent_len = strlen (last_slash + 1);
-    int parent_dir_path_len = path_len - dirent_len - 1;
+    int dirent_len;
+    int parent_dir_path_len;
+
+    dirent_len = strlen (last_slash + 1);
+    parent_dir_path_len = path_len - dirent_len;
 
     *dirent = malloc (dirent_len + 1);
     ASSERT (*dirent != NULL);

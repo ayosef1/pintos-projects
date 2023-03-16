@@ -172,7 +172,8 @@ inode_open (block_sector_t sector)
 struct inode *
 inode_reopen (struct inode *inode)
 {
-  if (inode != NULL) {
+  if (inode != NULL) 
+  {
     lock_acquire (&open_inodes_lock);
     inode->open_cnt++;
     lock_release (&open_inodes_lock);
@@ -191,6 +192,7 @@ inode_get_inumber (const struct inode *inode)
 bool
 inode_is_file (const struct inode *inode)
 {
+  /* TODO: fix this. maybe read from disk instead?*/
   return inode->is_file;
 }
 
