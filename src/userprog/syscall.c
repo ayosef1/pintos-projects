@@ -6,6 +6,7 @@
 #include "filesys/directory.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "filesys/inode.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
@@ -15,6 +16,8 @@
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 
+/*TODO: only here for INT_MAX since pathnames can be arbitrarily long. */
+#include <limits.h>
 static void syscall_handler (struct intr_frame *);
 
 static void sys_halt (void);
@@ -30,6 +33,11 @@ static int sys_write (uint32_t *esp);
 static void sys_seek (uint32_t *esp);
 static unsigned sys_tell (uint32_t *esp);
 static void sys_close (uint32_t *esp);
+static bool sys_chdir (uint32_t *esp);
+static bool sys_mkdir (uint32_t *esp);
+static bool sys_readdir (uint32_t *esp);
+static bool sys_isdir (uint32_t *esp);
+static int sys_inumber (uint32_t *esp);
 
 static void exit (int status);
 
@@ -99,6 +107,21 @@ syscall_handler (struct intr_frame *f)
       break;
     case SYS_CLOSE:
       sys_close (f->esp);
+      break;
+    case SYS_CHDIR:
+      f->eax = sys_chdir (f->esp);
+      break;
+    case SYS_MKDIR:
+      f->eax = sys_mkdir (f->esp);
+      break;
+    case SYS_READDIR:
+      f->eax = sys_readdir (f->esp);
+      break;
+    case SYS_ISDIR:
+      f->eax = sys_isdir (f->esp);
+      break;
+    case SYS_INUMBER:
+      f->eax = sys_inumber (f->esp);
       break;
     default:
       exit (-1);
@@ -176,6 +199,8 @@ sys_remove (uint32_t *esp)
   if (fname == NULL)
     return false;
 
+  /* TODO: only delete directories that are empty. */
+
   ret = filesys_remove (fname);
   return ret;
 }
@@ -220,7 +245,7 @@ sys_filesize (uint32_t *esp)
   int size;
   
   fd = get_arg_int (esp, 1);
-
+  /* TODO: should we exit if we given directory? */
   if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
     exit (-1);
   
@@ -301,6 +326,7 @@ sys_write (uint32_t *esp)
           int to_write = remaining > BUF_MAX ? BUF_MAX : remaining;
           putbuf (buffer, to_write);
           remaining -= to_write;
+          buffer += to_write;
         }
       bytes_written = size;
     }
@@ -365,6 +391,93 @@ sys_close (uint32_t *esp)
   
 }
 
+  /* TODO: using INT_MAX since pathname shouldn't have a limit. */
+static bool
+sys_chdir (uint32_t *esp)
+{
+  char *dirpath;
+  struct dir *dir;
+
+  dirpath = get_arg_string (esp, 1, INT_MAX);
+  if (dirpath == NULL)
+    return false;
+
+  dir = dir_pathname_lookup (dirpath);
+
+  if (dir == NULL)
+    return false;
+
+  thread_current ()->cwd = inode_get_inumber (dir_get_inode (dir));
+  dir_close (dir);
+  return true;
+}
+
+static bool
+sys_mkdir (uint32_t *esp)
+{
+  char *dir;
+
+  dir = get_arg_string (esp, 1, INT_MAX);
+  if (dir == NULL)
+    return false;
+
+  return filesys_mkdir (dir);
+}
+
+static bool
+sys_readdir (uint32_t *esp)
+{
+  int fd;
+  char *dir;
+
+  fd = get_arg_int (esp, 1);
+  dir = get_arg_string (esp, 1, INT_MAX);
+  return true;
+
+}
+
+static bool
+sys_isdir (uint32_t *esp)
+{
+  int fd;
+  struct file *fp;
+  struct inode *inode;
+
+  fd = get_arg_int (esp, 1);
+  fp = thread_current ()->fdtable[fd];
+
+  /* TODO: Not sure if we are supposed to exit */
+  if (fp == NULL)
+    exit (-1);
+  
+  inode = file_get_inode (fp);
+  if (inode == NULL)
+    exit (-1);
+  
+  return !inode_is_file (inode);
+}
+
+static int
+sys_inumber (uint32_t *esp)
+{
+  int fd;
+  struct file *fp;
+  struct inode *inode;
+
+  fd = get_arg_int (esp, 1);
+  fp = thread_current ()->fdtable[fd];
+
+  /* TODO: Not sure if we are supposed to exit */
+  if (fp == NULL)
+    exit (-1);
+  
+  inode = file_get_inode (fp);
+  if (inode == NULL)
+    exit (-1);
+  
+  return inode_get_inumber (inode);
+}
+
 /* Returns the int at position POS on stack pointed at
    by ESP. Exits is any of int bytes are in invalid
    memory. */
@@ -410,12 +523,13 @@ get_arg_string (void *esp, int pos, int limit)
   str_ptr = (char **)esp + pos;
 
   /* Check the bytes of the char * are all in valid memory */
-  if (!is_valid_memory (str_ptr, sizeof (char *)) || !is_valid_address(*str_ptr))
+  if (!is_valid_memory (str_ptr, sizeof (char *))
+      || !is_valid_address(*str_ptr))
     exit (-1);
 
   end = *str_ptr + limit + 1;
   
-  for (cur = *str_ptr + 1; cur < end; cur++)
+  for (cur = *str_ptr; cur < end; cur++)
     {
       if (pg_ofs(cur) == 0 && !is_valid_address (cur))
         exit (-1);

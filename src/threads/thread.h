@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "devices/block.h"
 #include "threads/fixed-point.h"
 #include "threads/synch.h"
 
@@ -169,6 +170,10 @@ struct thread
    struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
    struct child_exit_info *exit_info;  /* Thread's exit information shared with
                                           parent. */
+#endif
+
+#ifdef FILESYS
+   block_sector_t cwd;
 #endif
 
     /* Owned by thread.c. */

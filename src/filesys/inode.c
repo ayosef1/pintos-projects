@@ -48,6 +48,7 @@ struct inode
     bool removed;                       /* True if deleted, false otherwise. */
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
     block_sector_t file_start;          /* First data sector. */
+    bool is_file;
     struct lock lock;                   /* Sync for file extension. */
   };
 
@@ -85,7 +86,7 @@ inode_init (void)
    Returns true if successful.
    Returns false if memory or disk allocation fails. */
 bool
-inode_create (block_sector_t sector, off_t length)
+inode_create (block_sector_t sector, off_t length, bool is_file)
 {
   bool success = false;
 
@@ -105,8 +106,9 @@ inode_create (block_sector_t sector, off_t length)
 
   cache_entry = cache_add_sector (sector, true);
   disk_inode = (struct inode_disk  *) cache_entry->data;
-      disk_inode->start = start;
-      disk_inode->length = length;
+  disk_inode->start = start;
+  disk_inode->length = length;
+  disk_inode->is_file = is_file;
   disk_inode->magic = INODE_MAGIC;
   cache_entry->dirty = true;
   lock_release (&cache_entry->lock);
@@ -166,6 +168,7 @@ inode_open (block_sector_t sector)
 
   cache_read (inode->sector, &data, BLOCK_SECTOR_SIZE, 0);
   inode->file_start = data.start;
+  inode->is_file = data.is_file;
 
   lock_acquire (&open_inodes_lock);
   list_push_front (&open_inodes, &inode->elem);
@@ -191,6 +194,13 @@ block_sector_t
 inode_get_inumber (const struct inode *inode)
 {
   return inode->sector;
+}
+
+/* Returns INODE's inode number. */
+bool
+inode_is_file (const struct inode *inode)
+{
+  return inode->is_file;
 }
 
 /* Closes INODE and writes it to disk.
@@ -348,7 +358,7 @@ off_t
 inode_length (const struct inode *inode)
 {
   off_t inode_length;
-  struct cache_entry * cache_entry = cache_get_entry (inode->sector, R_SHARE);
+  struct cache_entry *cache_entry = cache_get_entry (inode->sector, R_SHARE);
   struct inode_disk *data = (struct inode_disk *) cache_entry->data;
   inode_length = data->length;
   cache_release_entry (cache_entry, R_SHARE);

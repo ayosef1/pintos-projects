@@ -5,6 +5,7 @@
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 #include "threads/malloc.h"
+#include "threads/thread.h"
 
 /* A directory. */
 struct dir 
@@ -24,9 +25,22 @@ struct dir_entry
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
 bool
-dir_create (block_sector_t sector, size_t entry_cnt)
+dir_create (block_sector_t sector, block_sector_t parent_sector,
+            size_t entry_cnt)
 {
-  return inode_create (sector, entry_cnt * sizeof (struct dir_entry));
+  struct dir *dir;
+  
+  if (!inode_create (sector, entry_cnt * sizeof (struct dir_entry), IS_DIR))
+    return false;
+  
+  dir = dir_open (inode_open (sector));
+  if (dir == NULL)
+    return false;
+  
+  dir_add (dir, ".", sector);
+  dir_add (dir, "..", parent_sector);
+  dir_close (dir);
+  return true;
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -233,4 +247,65 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
         } 
     }
   return false;
+}
+
+/* Returns the dir struct associated with the directory 
+ * specified at pathname or NULL if an error is encountered. */
+struct dir *
+dir_pathname_lookup(const char *pathname) 
+{
+  block_sector_t dir_sector_id;
+  char *pathname_cpy;
+
+  /* Check whether dealing with absolute or relative path. */
+  if (pathname[0] != '/') 
+    dir_sector_id = thread_current ()->cwd;
+  else
+    {
+      /* Ignore the beginning '/' in absolute path */
+      while (*pathname == '/')
+        pathname++;
+      dir_sector_id = ROOT_DIR_SECTOR;
+    }
+
+  pathname_cpy = malloc (strlen (pathname));
+  strlcpy (pathname_cpy, pathname, strlen (pathname) + 1);
+
+  bool in_dir = true;
+  char *token = NULL;
+  char *save_ptr = NULL;
+  struct inode *inode = NULL;
+  for (token = strtok_r (pathname_cpy, "/", &save_ptr);
+       token != NULL && *token != '\0';
+       token = strtok_r (NULL, "/", &save_ptr))
+    {
+      /* Every dirent must be inside a directory. */
+      if (!in_dir)
+        {
+          free (pathname_cpy);
+          inode_close (inode);
+          return NULL;
+        }
+        
+      struct dir *dir;
+      dir = dir_open (inode_open (dir_sector_id));
+      if (dir == NULL)
+        {
+          free (pathname_cpy);
+          dir_close (dir);
+          return NULL;
+        }
+
+      if (!dir_lookup (dir, token, &inode))
+        {
+          free (pathname_cpy);
+          dir_close (dir);
+          return NULL;
+        }
+      dir_sector_id = inode_get_inumber (inode);
+      in_dir = !inode_is_file (inode);
+      dir_close (dir);
+    }
+  /* free pathname copy (how does this work since we tokenized?)*/
+  return dir_open (inode);
 }
