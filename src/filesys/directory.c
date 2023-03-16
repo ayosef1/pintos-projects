@@ -232,7 +232,7 @@ dir_remove (struct dir *dir, const char *name)
   if (inode == NULL)
     goto done;
   
-  /* Not allowed to remove nonempty directories nor the cwd. */
+  /* Not allowed to remove nonempty directories or the cwd. */
   if (!inode_is_file (inode) && 
       (get_num_dirents (dir_open (inode)) != 0 ||
        thread_current ()->cwd == inode_get_inumber (inode)))

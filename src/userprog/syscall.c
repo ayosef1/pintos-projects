@@ -520,13 +520,16 @@ get_arg_string (void *esp, int pos, int limit)
 
   str_ptr = (char **)esp + pos;
 
-  /* Check the bytes of the char * are all in valid memory */
+  /* Check the bytes of the char * are all in valid memory. */
   if (!is_valid_memory (str_ptr, sizeof (char *))
       || !is_valid_address(*str_ptr))
     exit (-1);
 
+  /* Empty string. */
+  if (**str_ptr == '\0')
+    return NULL;
+
   end = *str_ptr + limit + 1;
-  
   for (cur = *str_ptr; cur < end; cur++)
     {
       if (pg_ofs(cur) == 0 && !is_valid_address (cur))
@@ -534,11 +537,10 @@ get_arg_string (void *esp, int pos, int limit)
       
       if (*cur == '\0')
         break;
-      
     }
   
-  /* Either empty string of greater than LIMIT */
-  if (cur == *str_ptr || cur == end)
+  /* String of longer than LIMIT */
+  if (cur == end)
     return NULL;
   
   return *str_ptr;
