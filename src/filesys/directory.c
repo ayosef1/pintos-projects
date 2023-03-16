@@ -192,6 +192,23 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
   return success;
 }
 
+static size_t
+get_num_dirents (struct dir *dir)
+{
+  struct dir_entry e;
+  size_t ofs;
+  size_t num_dirents;
+
+  ASSERT (dir != NULL);
+
+  num_dirents = 0;
+  for (ofs = 0; inode_read_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
+       ofs += sizeof e) 
+    if (e.in_use) 
+      num_dirents++;
+  return num_dirents - 2;
+}
+
 /* Removes any entry for NAME in DIR.
    Returns true if successful, false on failure,
    which occurs only if there is no file with the given NAME. */
@@ -213,6 +230,12 @@ dir_remove (struct dir *dir, const char *name)
   /* Open inode. */
   inode = inode_open (e.inode_sector);
   if (inode == NULL)
+    goto done;
+  
+  /* Not allowed to remove nonempty directories nor the cwd. */
+  if (!inode_is_file (inode) && 
+      (get_num_dirents (dir_open (inode)) != 0 ||
+       thread_current ()->cwd == inode_get_inumber (inode)))
     goto done;
 
   /* Erase directory entry. */
@@ -236,11 +259,10 @@ bool
 dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
 {
   struct dir_entry e;
-
   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) 
     {
       dir->pos += sizeof e;
-      if (e.in_use)
+      if (e.in_use && !strcmp(e.name, ".") && !strcmp(e.name, ".."))
         {
           strlcpy (name, e.name, NAME_MAX + 1);
           return true;
@@ -257,18 +279,28 @@ dir_pathname_lookup(const char *pathname)
   block_sector_t dir_sector_id;
   char *pathname_cpy;
 
+  if (*pathname == '\0')
+    return dir_open (inode_open (thread_current ()->cwd));
   /* Check whether dealing with absolute or relative path. */
-  if (pathname[0] != '/') 
-    dir_sector_id = thread_current ()->cwd;
-  else
+  if (pathname[0] == '/')
     {
-      /* Ignore the beginning '/' in absolute path */
       while (*pathname == '/')
         pathname++;
-      dir_sector_id = ROOT_DIR_SECTOR;
+      /* Case 1: absolute path to root directory. */
+      if (*pathname == '\0')
+        return dir_open (inode_open (ROOT_DIR_SECTOR));
+      /* Case 2: absolute path to different directory. */
+      else 
+        dir_sector_id = ROOT_DIR_SECTOR;
     }
+  /* Case 3: relative path consisting only of directory dirent. */
+  else
+    dir_sector_id = thread_current ()->cwd;
 
   pathname_cpy = malloc (strlen (pathname));
+  ASSERT (pathname != NULL);
+
+  char *pathname_cpy_free = pathname_cpy;
   strlcpy (pathname_cpy, pathname, strlen (pathname) + 1);
 
   bool in_dir = true;
@@ -282,7 +314,7 @@ dir_pathname_lookup(const char *pathname)
       /* Every dirent must be inside a directory. */
       if (!in_dir)
         {
-          free (pathname_cpy);
+          free (pathname_cpy_free);
           inode_close (inode);
           return NULL;
         }
@@ -291,14 +323,14 @@ dir_pathname_lookup(const char *pathname)
       dir = dir_open (inode_open (dir_sector_id));
       if (dir == NULL)
         {
-          free (pathname_cpy);
+          free (pathname_cpy_free);
           dir_close (dir);
           return NULL;
         }
 
       if (!dir_lookup (dir, token, &inode))
         {
-          free (pathname_cpy);
+          free (pathname_cpy_free);
           dir_close (dir);
           return NULL;
         }
@@ -306,6 +338,6 @@ dir_pathname_lookup(const char *pathname)
       in_dir = !inode_is_file (inode);
       dir_close (dir);
     }
-  /* free pathname copy (how does this work since we tokenized?)*/
+  free (pathname_cpy_free);
   return dir_open (inode);
 }

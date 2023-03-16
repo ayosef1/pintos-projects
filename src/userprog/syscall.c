@@ -173,7 +173,6 @@ sys_wait (uint32_t *esp)
 bool
 sys_create (uint32_t *esp)
 {
-  bool ret;
   char *fname;
   off_t initial_size;
 
@@ -182,24 +181,19 @@ sys_create (uint32_t *esp)
     return false;
 
   initial_size = get_arg_int (esp, 2);
-  ret = filesys_create (fname, initial_size);
-  return ret;
+  return filesys_create (fname, initial_size);
 }
 
 bool
 sys_remove (uint32_t *esp)
 {
-  bool ret;
   char *fname;
   
   fname = get_arg_string (esp, 1, NAME_MAX);
   if (fname == NULL)
     return false;
 
-  /* TODO: only delete directories that are empty. */
-
-  ret = filesys_remove (fname);
-  return ret;
+  return filesys_remove (fname);
 }
 
 int
@@ -240,7 +234,6 @@ sys_filesize (uint32_t *esp)
   int size;
   
   fd = get_arg_int (esp, 1);
-  /* TODO: should we exit if we given directory? */
   if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
     exit (-1);
   
@@ -420,12 +413,25 @@ static bool
 sys_readdir (uint32_t *esp)
 {
   int fd;
-  char *dir;
+  struct file *fp;
+  struct inode *inode;
 
   fd = get_arg_int (esp, 1);
-  dir = get_arg_string (esp, 1, INT_MAX);
-  return true;
+  if (!is_valid_fd (fd))
+    return false;
 
+  fp = thread_current ()->fdtable[fd];
+  if (fp == NULL || (inode = file_get_inode (fp)) == NULL || inode_is_file (inode))
+    return false;
+
+  struct dir *dir;
+  dir = dir_open (inode);
+  if (dir == NULL)
+    return false;
+    
+  bool result = dir_readdir(dir, get_arg_buffer (esp, 2, NAME_MAX + 1));
+  dir_close (dir);
+  return result;
 }
 
 static bool
