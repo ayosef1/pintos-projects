@@ -139,8 +139,7 @@ filesys_remove (const char *pathname)
       return false;
     }
   parent_dir = dir_pathname_lookup (parent_dir_path);
-  if (parent_dir != NULL &&
-      dir_lookup (parent_dir, filename, &file_inode))
+  if (parent_dir != NULL)
       success = dir_remove (parent_dir, pathname); 
   
   free (parent_dir_path);
@@ -243,7 +242,7 @@ split_path (const char *path, char **parent_dir_path, char **dirent)
     *dirent = malloc (path_len + 1);
     ASSERT (*dirent != NULL);
 
-    strlcpy (*parent_dir_path, "", 1);
+    strlcpy (*parent_dir_path, ".", 2);
     strlcpy (*dirent, path, path_len + 1);
   }
 }

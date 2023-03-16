@@ -259,7 +259,7 @@ cache_release_entry (struct cache_entry *e, enum cache_use_type type)
 {
     switch(type)
         {
-            case(W_SHARE):
+            case (W_SHARE):
                 lock_acquire (&e->lock);
             case (W_EXCL):
                 e->dirty = true;

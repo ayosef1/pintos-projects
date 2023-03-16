@@ -232,10 +232,12 @@ dir_remove (struct dir *dir, const char *name)
   if (inode == NULL)
     goto done;
   
-  /* Not allowed to remove nonempty directories or the cwd. */
+  /* Not allowed to remove nonempty directories, cwd, 
+     or directories currently open in process. */
   if (!inode_is_file (inode) && 
       (get_num_dirents (dir_open (inode)) != 0 ||
-       thread_current ()->cwd == inode_get_inumber (inode)))
+       thread_current ()->cwd == inode_get_inumber (inode) ||
+       inode_get_open_cnt (inode) > 1))
     goto done;
 
   /* Erase directory entry. */
@@ -279,7 +281,7 @@ dir_pathname_lookup(const char *pathname)
   block_sector_t dir_sector_id;
   char *pathname_cpy;
 
-  if (*pathname == '\0')
+  if (*pathname == '.')
     return dir_open (inode_open (thread_current ()->cwd));
   /* Check whether dealing with absolute or relative path. */
   if (pathname[0] == '/')

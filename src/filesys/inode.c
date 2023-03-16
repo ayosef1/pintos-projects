@@ -60,7 +60,6 @@ struct inode
     struct condition no_writers;        /* Condition variable to appropriately
                                            set deny_write_cnt. */
     
-    bool is_file;
     struct lock lock;                   /* Sync for file extension. */
   };
 
@@ -188,12 +187,11 @@ inode_get_inumber (const struct inode *inode)
   return inode->sector;
 }
 
-/* Returns INODE's inode number. */
-bool
-inode_is_file (const struct inode *inode)
+/* Returns number of times inode has been opened. */
+int
+inode_get_open_cnt (const struct inode *inode)
 {
-  /* TODO: fix this. maybe read from disk instead?*/
-  return inode->is_file;
+  return inode->open_cnt;
 }
 
 /* Closes INODE and writes it to disk.
@@ -397,6 +395,19 @@ inode_length (const struct inode *inode)
   inode_length = data->length;
   cache_release_entry (cache_entry, R_SHARE);
   return inode_length;
+}
+
+
+/* Indicates if INODE's represents file or directory. */
+bool
+inode_is_file (const struct inode *inode)
+{
+  bool is_file;
+  struct cache_entry *cache_entry = cache_get_entry (inode->sector, R_SHARE);
+  struct inode_disk *data = (struct inode_disk *) cache_entry->data;
+  is_file = data->is_file;
+  cache_release_entry (cache_entry, R_SHARE);
+  return is_file;
 }
 
 /* Update the inode INODE's length WRITE_END is larger than current length. */
