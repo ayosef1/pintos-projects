@@ -17,7 +17,7 @@
    the cache entry on a call to cache_get_entry. */
 enum cache_use_type
     {
-        W_EXCL,                         /* Exclusive write. */
+        EXCL,                         /* Exclusive write. */
         W_SHARE,                        /* Non exclusive write. */
         R_SHARE,                        /* Read of data. */
         R_AHEAD,                        /* Read ahead. */
@@ -30,6 +30,8 @@ struct cache_entry
         block_sector_t sector;          /* Block sector represented. */
         int write_refs;                 /* Total number of writer references. */
         int total_refs;                 /* Total number of references. */
+        int total_waiters;              /* Total waiters. */
+        int write_waiters;              /* Write waiters. */
         bool accessed;                  /* Accessed bit for eviction. */
         bool dirty;                     /* Dirty bit for eviction and write
                                            back. */
@@ -39,7 +41,7 @@ struct cache_entry
                                            write_refs decremented to zero. */
         struct condition no_refs;       /* For eviction, when on*/
         struct lock lock;               /* Lock to synchronize access to cache
-                                           entry metadata. */  
+                                           entry metadata. */
         uint8_t *data;                  /* Actual cached sector. */
     };
 

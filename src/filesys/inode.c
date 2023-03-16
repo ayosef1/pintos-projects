@@ -13,15 +13,22 @@
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
+/* All used for the multilevel index inode. */
 #define NUM_DIRECT_POINTERS 122
+/* Index of singly indirect block in inode. */
 #define SINGLE_INDIRECT_INDEX NUM_DIRECT_POINTERS
+/* Index of doublly indirect block in inode. */
 #define DOUBLE_INDIRECT_INDEX NUM_DIRECT_POINTERS + 1
+/* Number of block pointers in an inode. */
 #define NUM_BLOCK_POINTERS 124
+/* Number of block pointers in an indirect block. */
 #define POINTERS_PER_BLOCK  128
+/* Max number of indicies needed to get data block in inode. */
 #define MAX_INDICIES 3
+/* Max number of bytes a file can be. */
 #define MAX_FILE_BYTES (NUM_DIRECT_POINTERS + NUM_BLOCK_POINTERS + \
                         NUM_BLOCK_POINTERS * NUM_BLOCK_POINTERS)   \
-                        * BLOCK_SECTOR_SIZE                        \
+                        * BLOCK_SECTOR_SIZE    
 
 
 /* On-disk inode.
@@ -36,6 +43,7 @@ struct inode_disk
   };
 
 static void inode_update_length (struct inode *inode, off_t write_end);
+static bool inode_check_extension (struct inode *inode, off_t write_end);
 static off_t ofs_to_indicies (off_t ofs, off_t *indicies);
 static block_sector_t get_data_sector (block_sector_t inode_sector,
                                        off_t offset, bool read);
@@ -60,7 +68,8 @@ struct inode
     struct condition no_writers;        /* Condition variable to appropriately
                                            set deny_write_cnt. */
     
-    struct lock lock;                   /* Sync for file extension. */
+    struct lock deny_write_lock;        /* Sync for deny_write_cnt. */
+    struct lock extension_lock;         /* Sync for file extension. */
   };
 
 /* Returns the logical index of the block that byte POS resides in
@@ -157,7 +166,8 @@ inode_open (block_sector_t sector)
   inode->write_cnt = 0;
   inode->deny_write_cnt = 0;
   inode->removed = false;
-  lock_init (&inode->lock);
+  lock_init (&inode->deny_write_lock);
+  lock_init (&inode->extension_lock);
   cond_init (&inode->no_writers);
 
   lock_acquire (&open_inodes_lock);
@@ -277,14 +287,14 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
   const uint8_t *buffer = buffer_;
   off_t bytes_written = 0;
 
-  lock_acquire (&inode->lock);
+  lock_acquire (&inode->deny_write_lock);
   if (inode->deny_write_cnt)
     {
-      lock_release (&inode->lock);
+      lock_release (&inode->deny_write_lock);
       return 0;
     }
   inode->write_cnt++;
-  lock_release (&inode->lock);
+  lock_release (&inode->deny_write_lock);
 
   while (size > 0) 
     {
@@ -301,49 +311,39 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       if (chunk_size <= 0)
         break;
 
-      enum cache_use_type type;
+      /* Does checking of extension need to be synchronized. */
+      bool extension = inode_check_extension (inode, offset + chunk_size);
+      
       block_sector_t sector_id = get_data_sector (inode->sector, offset, false);
       if (sector_id == 0)
-        break;
+        {
+          if (extension)
+            lock_release (&inode->extension_lock);
+          break;
+        }
       
-      /* If extended the file need to . */
-      if (offset + chunk_size > inode_length(inode))
-        type = W_EXCL;
-      else
-        type = W_SHARE;
-      
-      // printf ("MIN LEFT: %d, SECTOR LEFT: %d, INODE_LEFT %d, SIZE %d\n", min_left, sector_left, inode_left, size);
-
-      struct cache_entry *cache_entry = cache_get_entry (sector_id, type);
-      // if (sector_id >= 382)
-      //   {
-      //     printf ("Sector Id %u, chunk size %d at ofset  %d\n", sector_id, chunk_size, sector_ofs);
-      //     hex_dump (offset, cache_entry->data + sector_ofs, chunk_size, true);
-      //   }
+      /* Always a shared write because other extension lock acquired and
+         other readers won't have access because length isn't updated. */
+      struct cache_entry *cache_entry = cache_get_entry (sector_id, W_SHARE);
       memcpy (cache_entry->data + sector_ofs, buffer + bytes_written,
               chunk_size);
-      cache_release_entry (cache_entry, type);
+      cache_release_entry (cache_entry, W_SHARE);
 
-      // if (sector_id >= 382)
-      //   {
-      //     hex_dump (offset, cache_entry->data + sector_ofs, chunk_size, true);
-      //   }
 
 
       /* Advance. */
       size -= chunk_size;
       offset += chunk_size;
       bytes_written += chunk_size;
+      if (extension)
+        inode_update_length (inode, offset);
     }
 
-    /* Update file length once write is complete. */
-    inode_update_length (inode, offset);
-
     /* Signal any process waiting to deny file write. */
-    lock_acquire (&inode->lock);
+    lock_acquire (&inode->deny_write_lock);
     if (--inode->write_cnt == 0)
-      cond_signal (&inode->no_writers, &inode->lock);
-    lock_release (&inode->lock);
+      cond_signal (&inode->no_writers, &inode->deny_write_lock);
+    lock_release (&inode->deny_write_lock);
   
 
   return bytes_written;
@@ -354,12 +354,12 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 void
 inode_deny_write (struct inode *inode) 
 {
-  lock_acquire (&inode->lock);
+  lock_acquire (&inode->deny_write_lock);
   while (inode->write_cnt != 0)
-    cond_wait (&inode->no_writers, &inode->lock);
+    cond_wait (&inode->no_writers, &inode->deny_write_lock);
   inode->deny_write_cnt++;
   ASSERT (inode->deny_write_cnt <= inode->open_cnt);
-  lock_release (&inode->lock);
+  lock_release (&inode->deny_write_lock);
 }
 
 /* Re-enables writes to INODE.
@@ -368,11 +368,11 @@ inode_deny_write (struct inode *inode)
 void
 inode_allow_write (struct inode *inode) 
 {
-  lock_acquire (&inode->lock);
+  lock_acquire (&inode->deny_write_lock);
   ASSERT (inode->deny_write_cnt > 0);
   ASSERT (inode->deny_write_cnt <= inode->open_cnt);
   inode->deny_write_cnt--;
-  lock_release (&inode->lock);
+  lock_release (&inode->deny_write_lock);
 }
 
 /* Whenever accessing the inode length we need to update it on disk as well
@@ -389,15 +389,31 @@ inode_length (const struct inode *inode)
   return inode_length;
 }
 
+static bool
+inode_check_extension (struct inode *inode, off_t write_end)
+{
+  bool extension = false;
+  struct cache_entry * inode_entry = cache_get_entry (inode->sector, EXCL);
+  struct inode_disk *data = (struct inode_disk *) inode_entry->data;
+  if (write_end > data->length)
+    {
+      lock_acquire (&inode->extension_lock);
+      extension = true;
+    }
+  cache_release_entry (inode_entry, EXCL);
+  return extension;
+}
+
 /* Update the inode INODE's length WRITE_END is larger than current length. */
 static void
 inode_update_length (struct inode *inode, off_t write_end)
 {
-    struct cache_entry * inode_entry = cache_get_entry (inode->sector, W_EXCL);
+    struct cache_entry * inode_entry = cache_get_entry (inode->sector, EXCL);
     struct inode_disk *data = (struct inode_disk *) inode_entry->data;
-    if (write_end > data->length)
-      data->length = write_end;
-    cache_release_entry (inode_entry, W_EXCL);
+    data->length = write_end;
+    inode_entry->dirty = true;
+    cache_release_entry (inode_entry, EXCL);
+    lock_release (&inode->extension_lock);
 }
 
 /* Calculates the indexes at each block level to  */
@@ -555,11 +571,12 @@ get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
   bool cur_is_inode = cur_depth == 0;
   // printf ("FINAL: %s %u points to BLOCK %u at index %d\n",
   //         cur_is_inode ? "INODE" : "INDIRECT", cur_sector, new_sectors[num_created - 1], indicies[parent_depth]);
-  cur = cache_get_entry (cur_sector, W_EXCL);
+  cur = cache_get_entry (cur_sector, EXCL);
   set_block_ptr (cur->data, indicies[cur_depth],
                   new_sectors[num_to_create - 1],
                   cur_is_inode);
-  cache_release_entry (cur, W_EXCL);
+  cur->dirty = true;
+  cache_release_entry (cur, EXCL);
     
   return data_sector;
 }

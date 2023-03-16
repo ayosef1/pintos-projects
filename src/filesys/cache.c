@@ -108,9 +108,11 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type)
     
     switch (type)
         {
-            case (W_EXCL):
+            case (EXCL):
                 while (entry->total_refs != 0)
                     cond_wait (&entry->no_refs, &entry->lock);
+                entry->accessed = true;
+                break;
             case (W_SHARE):
                 entry->total_refs++;
                 entry->write_refs++;
@@ -128,7 +130,7 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type)
     if (!present && type != R_AHEAD)
         push_read_ahead_queue (sector  + 1);
     
-    if (type != W_EXCL)
+    if (type != EXCL)
         lock_release (&entry->lock);
         
     return entry;
@@ -256,12 +258,14 @@ cache_release_entry (struct cache_entry *e, enum cache_use_type type)
         {
             case(W_SHARE):
                 lock_acquire (&e->lock);
-            case (W_EXCL):
-                e->dirty = true;
+                --e->write_refs;
+                --e->total_refs;
+                  e->dirty = true;
+            case (EXCL):
                 /* Gives priority to cleanup thread. */
-                if (--e->write_refs == 0)
+                if (e->write_refs == 0)
                     cond_signal (&e->no_writers, &e->lock);
-                if (--e->total_refs == 0)
+                if (e->total_refs == 0)
                     cond_signal (&e->no_refs, &e->lock);
                 lock_release (&e->lock);
                 break;
@@ -291,18 +295,17 @@ cache_write_to_disk (bool filesys_done)
             lock_acquire (&cur->lock);
             if (cur->allocated)
                 {
-                    while (cur->write_refs != 0)
-                        cond_wait (&cur->no_writers, &cur->lock);
-
                     if (cur->dirty)
-                        block_write (fs_device, cur->sector, cur->data);
-                    
-                    if (filesys_done)
+                        {
+                            while (cur->total_refs != 0)
+                                cond_wait (&cur->no_refs, &cur->lock);
+                            
+                            block_write (fs_device, cur->sector, cur->data);
+                            cur->dirty = false;
+                        }
+                    else if (filesys_done)
                         free (cur->data);
-                    else
-                        cur->dirty = 0;
                 }
-            
             lock_release (&cur->lock);
 
         }
