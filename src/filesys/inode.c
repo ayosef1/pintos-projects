@@ -60,6 +60,7 @@ struct inode
     struct condition no_writers;        /* Condition variable to appropriately
                                            set deny_write_cnt. */
     
+    bool is_file;
     struct lock lock;                   /* Sync for file extension. */
   };
 
@@ -184,6 +185,13 @@ block_sector_t
 inode_get_inumber (const struct inode *inode)
 {
   return inode->sector;
+}
+
+/* Returns INODE's inode number. */
+bool
+inode_is_file (const struct inode *inode)
+{
+  return inode->is_file;
 }
 
 /* Closes INODE and writes it to disk.
@@ -382,7 +390,7 @@ off_t
 inode_length (const struct inode *inode)
 {
   off_t inode_length;
-  struct cache_entry * cache_entry = cache_get_entry (inode->sector, R_SHARE);
+  struct cache_entry *cache_entry = cache_get_entry (inode->sector, R_SHARE);
   struct inode_disk *data = (struct inode_disk *) cache_entry->data;
   inode_length = data->length;
   cache_release_entry (cache_entry, R_SHARE);

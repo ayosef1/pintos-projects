@@ -330,7 +330,6 @@ load (struct process_arg *args, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  lock_acquire(&filesys_lock);
   file = filesys_open (args->exec_name);
 
   if (file == NULL) 
@@ -422,9 +421,7 @@ load (struct process_arg *args, void (**eip) (void), void **esp)
   success = true;
 
  done:
-  /* We arrive here whether the load is successful or not. */
-  lock_release (&filesys_lock);
-  
+  /* We arrive here whether the load is successful or not. */  
   thread_current ()->fdtable[EXEC_FD] = file;
   return success;
 }

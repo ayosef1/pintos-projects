@@ -5,6 +5,11 @@
 #include "threads/malloc.h"
 #include "threads/thread.h"
 
+#define CACHE_SIZE 64                       /* Size of buffer cache. */                             
+#define MAX_CLOCK_LOOPS 2                   /* Max number of iterations 
+                                               when in eviction. */     
+#define WRITE_BACK_PERIOD TIMER_FREQ * 30   /* Flush cache back to disk
+                                               every 30 seconds. */
 
 /* Synchronization when loading block sector into cache for race between
    two processes that both can't find block sector in cache. Prevents double

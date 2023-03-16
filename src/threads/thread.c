@@ -16,6 +16,7 @@
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 #include "filesys/file.h"
+#include "filesys/filesys.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -80,7 +81,8 @@ static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
 static struct thread *highest_priority_ready (void);
-static void init_thread (struct thread *, const char *name, int priority);
+static void init_thread (struct thread *, const char *name, int priority,
+                         block_sector_t cwd);
 static bool is_thread (struct thread *) UNUSED;
 static bool init_child (struct thread *t);
 static void *alloc_frame (struct thread *, size_t size);
@@ -117,7 +119,7 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   /* Initialize system load average at system boot. */
-  load_avg = int_to_fp(0);
+  load_avg = int_to_fp (0);
 
   /* Naturally, there are zero ready threads at boot. */
   num_ready = 0;
@@ -129,7 +131,7 @@ thread_init (void)
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
-  init_thread (initial_thread, "main", PRI_DEFAULT);
+  init_thread (initial_thread, "main", PRI_DEFAULT, ROOT_DIR_SECTOR);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
 }
@@ -234,7 +236,7 @@ thread_create (const char *name, int priority,
     return TID_ERROR;
 
   /* Initialize thread. */
-  init_thread (t, name, priority);
+  init_thread (t, name, priority, thread_current ()->cwd);
   tid = t->tid = allocate_tid ();
 
   /* Initialize thread's child struct if applicable. */
@@ -578,7 +580,8 @@ is_thread (struct thread *t)
 /* Does basic initialization of T as a blocked thread named
    NAME. */
 static void
-init_thread (struct thread *t, const char *name, int priority)
+init_thread (struct thread *t, const char *name, int priority,
+             block_sector_t cwd)
 {
   enum intr_level old_level;
 
@@ -597,6 +600,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
   t->waiting_lock = NULL;
+  #ifdef FILESYS
+    t->cwd = cwd;
+  #endif
 
   if (thread_mlfqs) {
     /* Initial thread has recent cpu time and nice value of 0.
@@ -627,6 +633,9 @@ init_thread (struct thread *t, const char *name, int priority)
     list_init (&t->children);
   #endif
 
+  #ifdef FILESYS
+    t->cwd = ROOT_DIR_SECTOR;
+  #endif
   /* Initialize the list of locks held by current list*/
   list_init (&t->locks_held);
 
@@ -659,6 +668,10 @@ init_child (struct thread *t)
 
       list_push_back (&thread_current ()->children, &exit_info->child_elem);
       t->exit_info = exit_info;
+
+      #ifdef FILESYS
+        t->cwd = thread_current ()->cwd;
+      #endif
     }
   return true;
 }
