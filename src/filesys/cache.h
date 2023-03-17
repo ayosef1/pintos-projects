@@ -17,8 +17,8 @@
    the cache entry on a call to cache_get_entry. */
 enum cache_use_type
     {
-        EXCL,                         /* Exclusive write. */
-        SHARE,                        /* Non exclusive write. */
+        EXCL,                         /* Exclusive Access. */
+        SHARE,                        /* Shared access. */
         R_AHEAD,                      /* Read ahead. */
     };
 
