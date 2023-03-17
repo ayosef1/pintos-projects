@@ -140,12 +140,12 @@ filesys_remove (const char *pathname)
     }
   parent_dir = dir_pathname_lookup (parent_dir_path);
   if (parent_dir != NULL)
-      success = dir_remove (parent_dir, pathname); 
+      success = dir_remove (parent_dir, filename); 
   
   free (parent_dir_path);
   free (filename);
   inode_close (file_inode);
-  dir_close (parent_dir); 
+  dir_close (parent_dir);
   return success;
 }
 

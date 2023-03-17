@@ -276,7 +276,7 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
 /* Returns the dir struct associated with the directory 
  * specified at pathname or NULL if an error is encountered. */
 struct dir *
-dir_pathname_lookup(const char *pathname) 
+dir_pathname_lookup (const char *pathname) 
 {
   block_sector_t dir_sector_id;
   char *pathname_cpy;
@@ -299,7 +299,7 @@ dir_pathname_lookup(const char *pathname)
   else
     dir_sector_id = thread_current ()->cwd;
 
-  pathname_cpy = malloc (strlen (pathname));
+  pathname_cpy = malloc (strlen (pathname) + 1);
   ASSERT (pathname != NULL);
 
   char *pathname_cpy_free = pathname_cpy;
@@ -320,13 +320,14 @@ dir_pathname_lookup(const char *pathname)
           inode_close (inode);
           return NULL;
         }
-        
+      
+      inode_close (inode);
+      
       struct dir *dir;
       dir = dir_open (inode_open (dir_sector_id));
       if (dir == NULL)
         {
           free (pathname_cpy_free);
-          dir_close (dir);
           return NULL;
         }
 

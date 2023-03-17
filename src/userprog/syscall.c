@@ -421,7 +421,9 @@ sys_readdir (uint32_t *esp)
     return false;
 
   fp = thread_current ()->fdtable[fd];
-  if (fp == NULL || (inode = file_get_inode (fp)) == NULL || inode_is_file (inode))
+  if (fp == NULL || 
+      (inode = file_get_inode (fp)) == NULL || 
+       inode_is_file (inode))
     return false;
 
   struct dir *dir;
@@ -429,7 +431,7 @@ sys_readdir (uint32_t *esp)
   if (dir == NULL)
     return false;
     
-  bool result = dir_readdir(dir, get_arg_buffer (esp, 2, NAME_MAX + 1));
+  bool result = dir_readdir (dir, get_arg_buffer (esp, 2, NAME_MAX + 1));
   dir_close (dir);
   return result;
 }
