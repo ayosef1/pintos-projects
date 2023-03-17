@@ -99,6 +99,7 @@ free_map_create (void)
     PANIC ("can't write free map");
 }
 
+/* Returns whether the entry is present in the free map. */
 bool free_map_present (block_sector_t sector)
 {
   bool present;

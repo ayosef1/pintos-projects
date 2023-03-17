@@ -44,6 +44,8 @@ struct inode_disk
 
 static void inode_update_length (struct inode *inode, off_t write_end);
 static bool inode_check_extension (struct inode *inode, off_t write_end);
+static void free_inode_blocks (struct inode *inode);
+static void free_block (block_sector_t sector, off_t height);
 static off_t ofs_to_indicies (off_t ofs, off_t *indicies);
 static block_sector_t get_data_sector (block_sector_t inode_sector,
                                        off_t offset, bool read);
@@ -216,7 +218,7 @@ inode_close (struct inode *inode)
         /* Deallocate blocks if removed. */
         if (inode->removed) 
           {
-            free_map_release (inode->sector);
+            free_inode_blocks (inode);
             /* Need to do recursion through blocks to release. */
           }
         free (inode);
@@ -393,6 +395,8 @@ inode_length (const struct inode *inode)
   return inode_length;
 }
 
+/* Atomically checks inode INODE's length and acquires the extension lock
+   if the write about to happen is longer than WRITE_END. */
 static bool
 inode_check_extension (struct inode *inode, off_t write_end)
 {
@@ -409,7 +413,8 @@ inode_check_extension (struct inode *inode, off_t write_end)
   return extension;
 }
 
-/* Update the inode INODE's length WRITE_END is larger than current length. */
+/* Update the inode INODE's length to WRITE_END and releases the extension
+   lock. */
 static void
 inode_update_length (struct inode *inode, off_t write_end)
 {
@@ -422,7 +427,13 @@ inode_update_length (struct inode *inode, off_t write_end)
     lock_release (&inode->extension_lock);
 }
 
-/* Calculates the indexes at each block level to  */
+/* Calculates the indicies required to find the level indicies of the
+   block that byte OFS resides in. 
+   
+   Returns the number of indicies needed to access the data block.
+   1 means a OFS is accessed via a directly indexed block in the inode.
+   2 means a OFS is accessed via singly indirect indexed block in the inode.
+   3 means a OFS is accessed via doubly indirect indexed block in the inode. */
 static off_t
 ofs_to_indicies (off_t ofs, off_t *indicies)
 {
@@ -520,6 +531,77 @@ allocate_new_blocks (block_sector_t *new_sectors, off_t *indicies,
     }
 }
 
+/* Recursively frees block sector SECTOR that is at height HEIGHT from
+   free map.
+
+   Height 0 corresponds to a data block. Height > 0 is the level of
+   indirection of the block. */
+static void
+free_block (block_sector_t sector, off_t height)
+{
+  if (sector == 0)
+    return;
+  
+  if (height > 0)
+    {
+      struct cache_entry *indirect_entry = cache_get_entry (sector, SHARE,
+                                                            false);
+      uint8_t *block = indirect_entry->data;
+      height--;
+      block_sector_t cur_sector;
+      for (off_t i = 0; i < NUM_BLOCK_POINTERS; i++)
+        {
+          cur_sector = get_block_ptr (block, i, false);
+          free_block (cur_sector, height);
+        }
+      cache_release_entry (indirect_entry, false);
+    }
+  free_map_release (sector);
+}
+
+/* Frees all blocks assocaited with inode INODE from the free map as well
+   as inode itself. */
+static void
+free_inode_blocks (struct inode *inode)
+{
+  /* Do SHARE so no deadlock when getting entries at level below.
+     Little bit hacky because should be exclusive access but no one
+     else can access this block when this call is made so OK. */
+  struct cache_entry *inode_entry = cache_get_entry (inode->sector, SHARE,
+                                                     false);
+  struct inode_disk *inode_disk = (struct inode_disk *) inode_entry->data;
+
+  off_t last_direct_idx = direct_idx (inode_disk->length);
+  off_t inode_stop_idx;
+
+  if (last_direct_idx < NUM_DIRECT_POINTERS)
+    inode_stop_idx = last_direct_idx;
+  else if (last_direct_idx < NUM_DIRECT_POINTERS + NUM_BLOCK_POINTERS)
+    inode_stop_idx = SINGLE_INDIRECT_INDEX;
+  else
+    inode_stop_idx = DOUBLE_INDIRECT_INDEX;
+
+  block_sector_t cur_sector;
+  off_t height = 0;
+  off_t cur_idx = 0;
+  while (cur_idx <= inode_stop_idx)
+    {
+      if (cur_idx == SINGLE_INDIRECT_INDEX)
+        height = 1;
+      else if (cur_idx == DOUBLE_INDIRECT_INDEX)
+        height = 2;
+
+      cur_sector = get_block_ptr (inode_disk, cur_idx, true);
+      free_block (cur_sector, height);
+      cur_idx++;
+    }
+
+  free_map_release (inode->sector);
+  cache_release_entry (inode_entry, SHARE);
+}
+
+
+
 /* Return the block number of the block that holds the byte at offset OFFSET
    in the data represented by the inode that lives at sector INODE_SECTOR.
    
@@ -546,7 +628,6 @@ get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
     {
       cur = cache_get_entry (child_sector, SHARE, false);
       cur_sector = child_sector;
-      // printf ("GORDON %u\n", cur_sector);
 
       cur_depth++;
       child_sector = get_block_ptr (cur->data, indicies[cur_depth], false);
@@ -574,8 +655,7 @@ get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
   /* Last case. If parent_depth == 0, inode, different logic to set ptr.
       Exclusive lock needed because the block exists already. */
   bool cur_is_inode = cur_depth == 0;
-  // printf ("FINAL: %s %u points to BLOCK %u at index %d\n",
-  //         cur_is_inode ? "INODE" : "INDIRECT", cur_sector, new_sectors[num_created - 1], indicies[parent_depth]);
+
   cur = cache_get_entry (cur_sector, EXCL, false);
   set_block_ptr (cur->data, indicies[cur_depth],
                   new_sectors[num_to_create - 1],
