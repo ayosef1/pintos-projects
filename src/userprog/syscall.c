@@ -425,13 +425,17 @@ sys_readdir (uint32_t *esp)
       (inode = file_get_inode (fp)) == NULL || 
        inode_is_file (inode))
     return false;
-
+  
   struct dir *dir;
   dir = dir_open (inode);
   if (dir == NULL)
     return false;
-    
-  bool result = dir_readdir (dir, get_arg_buffer (esp, 2, NAME_MAX + 1));
+  
+  bool result;
+  char *buffer;
+  buffer = get_arg_buffer (esp, 2, NAME_MAX + 1);
+  result = dir_readdir (dir, buffer);
+  
   dir_close (dir);
   return result;
 }

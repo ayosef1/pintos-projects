@@ -264,7 +264,9 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) 
     {
       dir->pos += sizeof e;
-      if (e.in_use && !strcmp(e.name, ".") && !strcmp(e.name, ".."))
+      if (e.in_use && 
+          strcmp(e.name, ".") != 0 &&
+          strcmp(e.name, "..") != 0)
         {
           strlcpy (name, e.name, NAME_MAX + 1);
           return true;
@@ -278,26 +280,19 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
 struct dir *
 dir_pathname_lookup (const char *pathname) 
 {
-  block_sector_t dir_sector_id;
   char *pathname_cpy;
-
-  if (*pathname == '.')
-    return dir_open (inode_open (thread_current ()->cwd));
-  /* Check whether dealing with absolute or relative path. */
+  struct dir *dir = NULL;
+  
+  /* Dealing with absolute path. */
   if (pathname[0] == '/')
     {
       while (*pathname == '/')
         pathname++;
-      /* Case 1: absolute path to root directory. */
-      if (*pathname == '\0')
-        return dir_open (inode_open (ROOT_DIR_SECTOR));
-      /* Case 2: absolute path to different directory. */
-      else 
-        dir_sector_id = ROOT_DIR_SECTOR;
+      dir = dir_open_root ();
     }
-  /* Case 3: relative path consisting only of directory dirent. */
+  /* Dealing with relative path. */
   else
-    dir_sector_id = thread_current ()->cwd;
+    dir = dir_open (inode_open (thread_current ()->cwd));
 
   pathname_cpy = malloc (strlen (pathname) + 1);
   ASSERT (pathname != NULL);
@@ -316,31 +311,26 @@ dir_pathname_lookup (const char *pathname)
       /* Every dirent must be inside a directory. */
       if (!in_dir)
         {
-          free (pathname_cpy_free);
+          dir = NULL;
           inode_close (inode);
-          return NULL;
+          break;
         }
       
-      inode_close (inode);
-      
-      struct dir *dir;
-      dir = dir_open (inode_open (dir_sector_id));
-      if (dir == NULL)
-        {
-          free (pathname_cpy_free);
-          return NULL;
-        }
-
       if (!dir_lookup (dir, token, &inode))
         {
-          free (pathname_cpy_free);
           dir_close (dir);
-          return NULL;
+          dir = NULL;
+          break;
         }
-      dir_sector_id = inode_get_inumber (inode);
-      in_dir = !inode_is_file (inode);
+      
       dir_close (dir);
+      if (inode_is_file (inode))
+          in_dir = false;
+      else
+        dir = dir_open (inode);
+
     }
+
   free (pathname_cpy_free);
-  return dir_open (inode);
+  return dir;
 }
