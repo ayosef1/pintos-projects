@@ -413,30 +413,26 @@ static bool
 sys_readdir (uint32_t *esp)
 {
   int fd;
+  char *buffer;
   struct file *fp;
-  struct inode *inode;
+  struct dir *dir;
 
   fd = get_arg_int (esp, 1);
   if (!is_valid_fd (fd))
     return false;
 
   fp = thread_current ()->fdtable[fd];
-  if (fp == NULL || 
-      (inode = file_get_inode (fp)) == NULL || 
-       inode_is_file (inode))
+  if (fp == NULL)
     return false;
   
-  struct dir *dir;
-  dir = dir_open (inode);
+  dir = file_get_dir (fp);
   if (dir == NULL)
     return false;
   
-  bool result;
-  char *buffer;
+  ;
   buffer = get_arg_buffer (esp, 2, NAME_MAX + 1);
-  result = dir_readdir (dir, buffer);
+  bool result = dir_readdir (dir, buffer);
   
-  dir_close (dir);
   return result;
 }
 
