@@ -241,6 +241,9 @@ sys_filesize (uint32_t *esp)
 	if (file == NULL)
 		exit (-1);
   
+  if (file_get_dir (file) != NULL)
+    exit (-1);
+
 	size = file_length (file);
   
   return size;
@@ -277,8 +280,11 @@ sys_read (uint32_t *esp)
 
         if (fp == NULL)
           return -1;
+        
+        if (file_get_dir (fp) != NULL)
+          return -1;
 
-        bytes_read = file_read(fp, buffer, size);
+        bytes_read = file_read (fp, buffer, size);
     }
   
   return bytes_read;
@@ -323,7 +329,10 @@ sys_write (uint32_t *esp)
       if (fp == NULL) 
         return -1;
 
-      bytes_written = file_write(fp, buffer, size);
+      if (file_get_dir (fp) != NULL)
+        return -1;
+
+      bytes_written = file_write (fp, buffer, size);
     }
 
   return bytes_written;
@@ -343,6 +352,9 @@ sys_seek (uint32_t *esp)
   if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
     exit (-1);
   
+  if (file_get_dir (cur->fdtable[fd]) != NULL)
+    exit (-1);
+  
   file_seek (cur->fdtable[fd], pos);
 }
 
@@ -356,6 +368,9 @@ sys_tell (uint32_t *esp)
   cur = thread_current ();
 
   if (cur->fdtable[fd] == NULL)
+    exit (-1);
+  
+  if (file_get_dir (cur->fdtable[fd]) != NULL)
     exit (-1);
 
   return file_tell (cur->fdtable[fd]);
@@ -429,7 +444,6 @@ sys_readdir (uint32_t *esp)
   if (dir == NULL)
     return false;
   
-  ;
   buffer = get_arg_buffer (esp, 2, NAME_MAX + 1);
   bool result = dir_readdir (dir, buffer);
   
@@ -441,7 +455,6 @@ sys_isdir (uint32_t *esp)
 {
   int fd;
   struct file *fp;
-  struct inode *inode;
 
   fd = get_arg_int (esp, 1);
   fp = thread_current ()->fdtable[fd];
@@ -450,11 +463,7 @@ sys_isdir (uint32_t *esp)
   if (fp == NULL)
     exit (-1);
   
-  inode = file_get_inode (fp);
-  if (inode == NULL)
-    exit (-1);
-  
-  return !inode_is_file (inode);
+  return file_get_dir (fp) != NULL;
 }
 
 static int
