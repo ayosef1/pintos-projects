@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include "filesys/cache.h"
 #include "filesys/inode.h"
+#include "filesys/free-map.h"
 #include "threads/malloc.h"
 #include "threads/thread.h"
 
@@ -28,8 +29,12 @@ struct lock read_ahead_lock;
 /* CV to put read ahead thread to sleep if no sectors to read. */
 struct condition read_ahead_cv;
 
+static struct cache_entry *cache_add_sector (block_sector_t sector, bool new);
 static struct cache_entry *cache_alloc (void);
 static struct cache_entry *evict_cache_entry (void);
+static void get_entry_sync (struct cache_entry *entry,
+                            enum cache_use_type type,
+                            bool evict);
 static void tick_clock_hand (void);
 static void push_read_ahead_queue (block_sector_t);
 static void read_ahead_fn (void *aux UNUSED);
@@ -60,7 +65,7 @@ cache_init (void)
     for (cur = cache_begin; cur < cache_end; cur++)
         {
             lock_init (&cur->lock);
-            cond_init (&cur->no_writers);
+            cond_init (&cur->excl_done);
             cond_init (&cur->no_refs);
             cur->data = malloc (BLOCK_SECTOR_SIZE);
             if (cur->data == NULL)
@@ -79,85 +84,128 @@ cache_init (void)
 
 
 /* Returns a cache entry corresponding to SECTOR loading from disk if 
-   not already present. Increments the cache entry's write_cnt if WRITE flag 
-   is true. If READ_AHEAD flag set, asynchronously reads next block sector if 
-   block sector SECTOR is not yet cached.*/
+   not already present. Applies appropriate synchronization and updates
+   to the entry's metadata based on use type TYPE.
+   If flag NEW is set, doesn't do initial search of cache to see if entry
+   there.
+
+   Reads ahead if TYPE isn't READ AHEAD and block SECTOR wasn't already
+   cached. */
 struct cache_entry *
-cache_get_entry (block_sector_t sector, enum cache_use_type type)
+cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new)
 {
     /* Return a new entry. */
-    if (type == NEW)
-        return cache_add_sector (sector, true);
-    
-    /* Seach cache if present. */
-    struct cache_entry *entry;
     bool present = false;
-    for (entry = cache_begin; entry < cache_end; entry++)
+    struct cache_entry *entry;
+    /* Seach cache if present. */
+    if (!new)
         {
-            lock_acquire (&entry->lock);
-            if (entry->allocated && entry->sector == sector)
-                {
-                    present = true;
-                    break;
-                }
-            lock_release (&entry->lock);
+                for (entry = cache_begin; entry < cache_end; entry++)
+                    {
+                        lock_acquire (&entry->lock);
+                        if (entry->allocated && entry->sector == sector)
+                            {
+                                present = true;
+                                break;
+                            }
+                        lock_release (&entry->lock);
+                    }
         }
     
     if (!present)
-        entry = cache_add_sector (sector, false);
+        entry = cache_add_sector (sector, new);
     
-    switch (type)
-        {
-            case (EXCL):
-                while (entry->total_refs != 0)
-                    cond_wait (&entry->no_refs, &entry->lock);
-                entry->accessed = true;
-                break;
-            case (W_SHARE):
-                entry->total_refs++;
-                entry->write_refs++;
-                entry->accessed = true;
-                break;
-            case (R_SHARE):
-                entry->total_refs++;
-                entry->accessed = true;
-                break;
-            default:
-                break;
-        }
+    get_entry_sync (entry, type, false);
     
     /* Read ahead if it isn't present and not already reading ahead. */
     if (!present && type != R_AHEAD)
-        push_read_ahead_queue (sector  + 1);
+        push_read_ahead_queue (sector + 1);
     
     if (type != EXCL)
         lock_release (&entry->lock);
         
     return entry;
 }
+void
+cache_release_entry (struct cache_entry *entry, enum cache_use_type type)
+{
+    switch(type)
+        {
+            case(EXCL):
+                if (entry->shared_waiters != 0)
+                    /* Wake up every shared waiting thread. */
+                    cond_broadcast (&entry->excl_done, &entry->lock);
+                break;
+            case (SHARE):
+                lock_acquire (&entry->lock);
+                entry->shared_refs--;
+                /* Signal one excl waiter at a time. */
+                if (entry->shared_refs == 0 && entry->excl_waiters != 0)
+                    cond_signal (&entry->no_refs, &entry->lock);
+                break;
+            default:
+                break;
+        }
+    lock_release (&entry->lock);
+}
+
+/* Writes all dirty buffer cache entries to disk. If FILESYS_DONE flag set,
+   frees memory associated with cached block after written back and then
+   frees cache before returning. */
+void
+cache_write_to_disk (bool filesys_done)
+{
+    struct cache_entry *cur;
+    for (cur = cache_begin; cur < cache_end; cur++)
+        {
+            lock_acquire (&cur->lock);
+            if (cur->allocated)
+                {
+                    get_entry_sync (cur, EXCL, false);
+                    if (cur->dirty)
+                        {
+                            block_write (fs_device, cur->sector, cur->data);
+                            cur->dirty = false;
+                        }
+                    else if (filesys_done)
+                        free (cur->data);
+
+                    cache_release_entry (cur, EXCL);
+                }
+            else
+                lock_release (&cur->lock);
+
+        }
+    
+    if (filesys_done)
+        free (cache_begin);
+}
 
 /* Gets a new cache entry for the sector SECTOR either via allocation or
-   eviction if no free cache entries and initializes metadata. */
-struct cache_entry *
+   eviction if no free cache entries and initializes metadata. If flag NEW
+   is set no read from disk and just zeroes out acquired cache entry. */
+static struct cache_entry *
 cache_add_sector (block_sector_t sector, bool new)
 {
+    struct cache_entry *new_entry;
     lock_acquire (&get_new_lock);
-
     /* Second check to account for race between two threads loading same
        block sector into buffer cache. */
-    struct cache_entry *new_entry;
-    for (new_entry = cache_begin; new_entry < cache_end; new_entry++)
+    if (!new)
         {
-
-            /* No fine grain lock required here becuase must have the
-               get_new_lock lock to change these members. */
-            if (new_entry->allocated && new_entry->sector == sector)
+            for (new_entry = cache_begin; new_entry < cache_end; new_entry++)
                 {
-                    /* Ordering very important. Acquire the the entry lock
-                       before releasing get_new_lock so entry isn't evicted
-                       between these two steps. */
-                    lock_acquire (&new_entry->lock);
-                    goto done;
+
+                    /* No fine grain lock required here becuase must have the
+                    get_new_lock lock to change these members. */
+                    if (new_entry->allocated && new_entry->sector == sector)
+                        {
+                            /* Ordering very important. Acquire the the entry 
+                            lock before releasing get_new_lock so entry isn't 
+                            evicted between these two steps. */
+                            lock_acquire (&new_entry->lock);
+                            goto done;
+                        }
                 }
         }
 
@@ -172,16 +220,10 @@ cache_add_sector (block_sector_t sector, bool new)
         PANIC ("Issue with getting new frame via %s, should never retrun NULL",
                can_allocate ? "ALLOCATION" : "EVICTION");
     
-    ASSERT (lock_held_by_current_thread (&new_entry->lock));
-    ASSERT (new_entry->write_refs == 0);
-    ASSERT (new_entry->total_refs == 0);
     new_entry->sector = sector;
 
     if (new)
-        {
-            new_entry->accessed = true;
-            memset (new_entry->data, 0, BLOCK_SECTOR_SIZE);
-        }
+        memset (new_entry->data, 0, BLOCK_SECTOR_SIZE);
     else
         block_read (fs_device, sector, new_entry->data);
 
@@ -223,12 +265,12 @@ evict_cache_entry (void)
             lock_acquire (&clock_hand->lock);
             if (clock_hand->allocated)
                 {
-                    while (clock_hand->total_refs != 0)
-                        cond_wait (&clock_hand->no_refs, &clock_hand->lock);
-                    
+                    get_entry_sync (clock_hand, EXCL, true);
                     if (clock_hand->accessed)
                         {
-                            clock_hand->accessed = 0;
+                            // printf ("Sector %u was accesed\n", clock_hand->sector);
+                            clock_hand->accessed = false;
+                            cache_release_entry (clock_hand, EXCL);
                         }
                     else
                         {
@@ -237,12 +279,22 @@ evict_cache_entry (void)
                                 block_write (fs_device, clock_hand->sector,
                                              clock_hand->data);
                             
+                            /* Signal writers to be able to gain access after
+                               lock is released. */
+                            if (clock_hand->shared_waiters)
+                                cond_broadcast (&clock_hand->excl_done,
+                                                &clock_hand->lock);
+
                             struct cache_entry *evicted = clock_hand;
                             tick_clock_hand ();
                             return evicted;
                         }
                 }
-            lock_release (&clock_hand->lock);
+            else
+                {
+                    // printf ("In eviction sector %u was not allocated\n", clock_hand->sector);
+                    lock_release (&clock_hand->lock);
+                }
 
             tick_clock_hand ();
             if (clock_hand == clock_start)
@@ -251,67 +303,50 @@ evict_cache_entry (void)
     return NULL;
 }
 
-void
-cache_release_entry (struct cache_entry *e, enum cache_use_type type)
+/* Synchronizes use of the cache entry ENTRY after the lock has been
+   acquired based on the TYPE of use and updates the ENTRY's metadata
+   depending on whether process waits or gains access.
+   
+   If type is EXCL:
+    Waits until the number of shared users has dropped to 0.
+   If type is SHARE
+    Checks that there aren't any processes already waiting exclusive access.
+    If there are, waits to be signaled after the first process wanting
+    exclusive access has completed.
+
+    Otherwise, no syncrhonization needed. */
+static void
+get_entry_sync (struct cache_entry *entry, enum cache_use_type type,
+                bool evict)
 {
-    switch(type)
+    switch (type)
         {
-            case(W_SHARE):
-                lock_acquire (&e->lock);
-                --e->write_refs;
-                --e->total_refs;
-                  e->dirty = true;
             case (EXCL):
-                /* Gives priority to cleanup thread. */
-                if (e->write_refs == 0)
-                    cond_signal (&e->no_writers, &e->lock);
-                if (e->total_refs == 0)
-                    cond_signal (&e->no_refs, &e->lock);
-                lock_release (&e->lock);
+                if (entry->shared_refs != 0)
+                    {
+                        entry->excl_waiters++;
+                        /* While to deal with supurious wakeup. */
+                        do
+                            cond_wait (&entry->no_refs, &entry->lock);
+                        while (entry->shared_refs != 0);
+                        entry->excl_waiters--;
+                    }
+                if (!evict)
+                    entry->accessed = true;
                 break;
-            case (R_SHARE):
-                lock_acquire (&e->lock);
-                if (--e->total_refs == 0)
-                    cond_signal (&e->no_refs, &e->lock);
-                lock_release (&e->lock);
-                break;
-            case (NEW):
-                lock_release (&e->lock);
+            case (SHARE):
+                if (entry->excl_waiters != 0)
+                    {
+                        entry->shared_waiters++;
+                        cond_wait (&entry->excl_done, &entry->lock);
+                        entry->shared_waiters--;
+                    }
+                entry->shared_refs++;
+                entry->accessed = true;
                 break;
             default:
                 break;
         }
-}
-
-/* Writes all dirty buffer cache entries to disk. If FILESYS_DONE flag set,
-   frees memory associated with cached block after written back and then
-   frees cache before returning. */
-void
-cache_write_to_disk (bool filesys_done)
-{
-    struct cache_entry *cur;
-    for (cur = cache_begin; cur < cache_end; cur++)
-        {
-            lock_acquire (&cur->lock);
-            if (cur->allocated)
-                {
-                    if (cur->dirty)
-                        {
-                            while (cur->total_refs != 0)
-                                cond_wait (&cur->no_refs, &cur->lock);
-                            
-                            block_write (fs_device, cur->sector, cur->data);
-                            cur->dirty = false;
-                        }
-                    else if (filesys_done)
-                        free (cur->data);
-                }
-            lock_release (&cur->lock);
-
-        }
-    
-    if (filesys_done)
-        free (cache_begin);
 }
 
 /* Moves the clock hand forward once in the ring buffer. */
@@ -350,8 +385,12 @@ read_ahead_fn (void *aux UNUSED)
             struct list_elem *e = list_pop_front (&read_ahead_queue);
             lock_release (&read_ahead_lock);
             struct r_ahead_entry *entry = list_entry (e, struct r_ahead_entry,
-                                                    list_elem);
-            cache_get_entry (entry->sector, R_AHEAD);
+                                                      list_elem);
+            if (free_map_present (entry->sector))
+                {
+                    // printf ("Read ahead of sector %u", entry->sector);
+                    cache_get_entry (entry->sector, R_AHEAD, false);
+                }
             free (entry);
         }
 }
