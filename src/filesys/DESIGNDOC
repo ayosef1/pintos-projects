@@ -57,6 +57,68 @@ currently cached.
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+Changes to inode.c:
+
+    /* All used for the multilevel index inode. */
+    #define NUM_DIRECT_POINTERS 122
+    /* Index of singly indirect block in inode. */
+    #define SINGLE_INDIRECT_INDEX NUM_DIRECT_POINTERS
+    /* Index of doublly indirect block in inode. */
+    #define DOUBLE_INDIRECT_INDEX NUM_DIRECT_POINTERS + 1
+    /* Number of block pointers in an inode. */
+    #define NUM_BLOCK_POINTERS 124
+    /* Number of block pointers in an indirect block. */
+    #define POINTERS_PER_BLOCK  128
+    /* Max number of indicies needed to get data block in inode. */
+    #define MAX_INDICIES 3
+    /* Max number of bytes a file can be. */
+    #define MAX_FILE_BYTES (NUM_DIRECT_POINTERS + NUM_BLOCK_POINTERS + \
+                            NUM_BLOCK_POINTERS * NUM_BLOCK_POINTERS)   \
+                            * BLOCK_SECTOR_SIZE                        \
+
+    /* Synchronization for `open_inodes` list */
+    static struct lock open_inodes_lock;
+
+    Changed `struct inode_disk` to:
+
+        struct inode_disk
+        {
+            off_t length;                               /* File size in bytes.*/
+            block_sector_t blocks [NUM_BLOCK_POINTERS]; /* Block Pointers. */
+            bool is_file;                               /* Whether inode
+                                                           represents file or
+                                                           dir.*/
+            unsigned magic;                             /* Magic number. */
+        };
+
+    Added members `struct inode` to:
+
+        int write_cnt;                      /* Number of writers. */
+        struct condition no_writers;        /* Condition variable to 
+                                               appropriately set 
+                                               deny_write_cnt. */
+        
+        struct lock lock;                   /* Sync for file extension. */
+------------------------------------------------------------------------------
+Changes to cache.h:
+
+    Added new enum to represent different use types that determine how to 
+    synchronize access to the cache entry on a call to cache_get_entry:
+
+        enum cache_use_type
+            {
+                EXCL,                         /* Exclusive access. */
+                SHARE,                        /* Non exclusive write. */
+                SHARE,                        /* Read of data. */
+                R_AHEAD,                        /* Read ahead. */
+                NEW                             /* Use type. */
+            };
+------------------------------------------------------------------------------
+Changes to free_map.c
+
+    static struct lock free_map_lock;    /* Lock to synchronize access to free
+                                            map. */
+
 >> A2: What is the maximum size of a file supported by your inode
 >> structure?  Show your work.
 
@@ -82,6 +144,28 @@ This comes out to:
 >> A3: Explain how your code avoids a race if two processes attempt to
 >> extend a file at the same time.
 
+Interleaved writing and reading when not extending a file is achieved with
+the use of the `SHARE` and `SHARE` type accesses. These two accesses
+release the lock on the relevant cached block in the buffer cache once they
+have updated the relevant metadata, meaning that mutiple processes can read
+and write to a block in a file if before the EOF.
+
+Writing in the `inode_write_at` funciton is done in block increments, where
+you write a block at a time. Before accessing getting the relevant sector number
+of the block to write to, a process checks what the length of the file is on
+the inode. It does so using the `EXCL` flag, meaning that it waits for all 
+other processes to stop using the cached inode and then acquires the lock to the
+cache entry (i.e. exclusive access to the `length` field). If it sees that
+the current write would extend the file it acquires the extension lock.
+
+The `extension_lock` synchronizes these actions for processes extending a file:
+    1) acquiring the block (and alllocating if neeeded).
+    2) Writing to the block.
+    3) Updating the length field in the inode. 
+
+Moreover there are no race conditions between two processes trying to extend
+a file at the same time.
+
 >> A4: Suppose processes A and B both have file F open, both
 >> positioned at end-of-file.  If A reads and B writes F at the same
 >> time, A may read all, part, or none of what B writes.  However, A
@@ -89,12 +173,55 @@ This comes out to:
 >> nonzero data, A is not allowed to see all zeros.  Explain how your
 >> code avoids this race.
 
+The first measure to avoid this race was to store the length of an inode on the
+disk sector on which the inode is stored. This ensures that we can use the fine
+grain synchronization of the buffer cache entries to our advantage for this 
+race. It means that access to the length of the inode is synchronized.
+
+The second measure was making it the case that a writer that is extending a file
+only updates the length of the file once it has completed the block write that
+extends the file.
+
+Specifically, it uses the `EXCL` flag when it accesses to update the length.
+This flag ensures uses the condition variable `no_refs` to wait there are no
+users of the cached inode sector, gains exclusive control and then updates the
+length.  The flag also marks the page as dirty so it is written back to disk
+by the write back funciton.
+
+Correspondingly, a process is only able to read up until EOF, which is
+represented by the `length` of the inode. This means that Process A has to wait
+until the write is complete and B has updated the length member before it can
+read what B has written beyond the EOF before B's write.
+
 >> A5: Explain how your synchronization design provides "fairness".
 >> File access is "fair" if readers cannot indefinitely block writers
 >> or vice versa.  That is, many processes reading from a file cannot
 >> prevent forever another process from writing the file, and many
 >> processes writing to a file cannot prevent another process forever
 >> from reading the file.
+
+One way to ensure fairness is by making sure that reading and writing is done
+on a block by block basis. This means that a large read or write will not
+starve other processes as it will release the lock and be added to the back of
+the waiters queue for those attempting to access the block (the granularity
+of locking).
+
+Our use of shared lock also creates fairness as most writes and reads can be
+interleaved and don't require exclusive access to a block. The only case where
+starvation could occur is when an exclusive lock (with the `EXCL` flag) is
+begin acquired. This flag is acquired when updating metadata on a block, either
+a block pointer on a block or updating and inode. To prevent starvation
+
+In attempting to acquire this lock, the process attempting to
+write waits on the condition variable `no_refs`. Starvation could occur in this
+scenario since processes could conitnue to 
+
+
+Our fariness also takes advantage of the priority and round robin fairness that
+already exists within the pintos synrchronization. Specfically threads trying
+to access a resource are ordered by priority and then by arrival time. This
+means that neither reads nor writes are specifically prioritised when waiting
+on a lock.
 
 ---- RATIONALE ----
 
@@ -116,8 +243,7 @@ direct, but also wanting to allow for files of medium size ~64 - 128KB to not
 require double indexing (and so more disk access). Hence we include one singly
 indirect index.
 
-This was supported
-by similar design choices made by Unix in their filesystem.
+This was supported by similar design choices made by Unix in their filesystem.
 
                 SUBDIRECTORIES
                 ==============
@@ -187,18 +313,6 @@ struct cache_entry
                                            entry metadata. */  
         uint8_t *data;                  /* Actual cached sector. */
     };
-
-Added new enum to represent different  use types that determine how to 
-synchronize access to the cache entry on a call to cache_get_entry:
-
-    enum cache_use_type
-        {
-            W_EXCL,                         /* Exclusive write. */
-            W_SHARE,                        /* Non exclusive write. */
-            R_SHARE,                        /* Read of data. */
-            R_AHEAD,                        /* Read ahead. */
-            NEW                             /* Use type. */
-        };
 
 New data structure to represent entry in the read ahead queue
 
@@ -328,9 +442,10 @@ that the `total_refs` is non-zero.
 Correspondingly, during eviction, when process B is deciding whether to evict
 a block from the cache it first acquires the cache lock and inspects its
 `total_refs` member. If this member is non-zero, it blocks on the condition
-variable `no_refs` until `total_refs` is zero. This means that blocks that are
-being actively written to or read from i.e. `total_refs` is non zero, are never
-evicted.
+variable `no_refs` until `total_refs` is zero. The process that decrements
+`total_refs` to zero signals the process B when finished writing / reading. 
+This means that blocks that are being actively written to or read from i.e. 
+`total_refs` is non zero, are never evicted.
 
 >> C6: During the eviction of a block from the cache, how are other
 >> processes prevented from attempting to access the block?
