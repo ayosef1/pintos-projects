@@ -44,7 +44,8 @@ free_map_allocate (size_t cnt, block_sector_t *sectorp)
             }
           return false;
         }
-      /* Put in reverse order. */
+      /* Put in reverse order for ease of use in block allocation
+         in fn inode_write_at (). */
       sectorp[cnt - i -1] = sector;
     }
   return true;
@@ -96,4 +97,13 @@ free_map_create (void)
     PANIC ("can't open free map");
   if (!bitmap_write (free_map, free_map_file))
     PANIC ("can't write free map");
+}
+
+bool free_map_present (block_sector_t sector)
+{
+  bool present;
+  lock_acquire (&free_map_lock);
+  present = bitmap_test (free_map, sector);
+  lock_release (&free_map_lock);
+  return present;
 }
