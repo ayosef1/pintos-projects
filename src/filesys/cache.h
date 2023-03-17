@@ -48,7 +48,8 @@ void cache_init (void);
 struct cache_entry *cache_get_entry (block_sector_t sector,
                                      enum cache_use_type type,
                                      bool new);
-void cache_release_entry (struct cache_entry *e, enum cache_use_type type);
+void cache_release_entry (struct cache_entry *e, enum cache_use_type type,
+                          bool dirty);
 void cache_write_to_disk (bool filesys_done);
 
 #endif /* filesys/directory.h */

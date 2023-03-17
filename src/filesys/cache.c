@@ -127,7 +127,8 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new)
     return entry;
 }
 void
-cache_release_entry (struct cache_entry *entry, enum cache_use_type type)
+cache_release_entry (struct cache_entry *entry, enum cache_use_type type,
+                     bool dirty)
 {
     switch(type)
         {
@@ -146,6 +147,10 @@ cache_release_entry (struct cache_entry *entry, enum cache_use_type type)
             default:
                 break;
         }
+
+    if (dirty)
+        entry->dirty = true;
+    
     lock_release (&entry->lock);
 }
 
@@ -170,7 +175,7 @@ cache_write_to_disk (bool filesys_done)
                     else if (filesys_done)
                         free (cur->data);
 
-                    cache_release_entry (cur, EXCL);
+                    cache_release_entry (cur, EXCL, false);
                 }
             else
                 lock_release (&cur->lock);
@@ -266,24 +271,28 @@ evict_cache_entry (void)
             if (clock_hand->allocated)
                 {
                     get_entry_sync (clock_hand, EXCL, true);
+                    /* Once executing this step it is guaranteed that if the
+                       accessed bit is not set that there is no one waiting
+                       for this entry. This is because if there are others
+                       waiting, they acquired while sleeping in get_entry_sync.
+                       If you sleep in get_entry_sync it means it was used
+                       before and so accessed will be set. Therefore no races
+                       starvation of threads waiting on this entry. */
                     if (clock_hand->accessed)
                         {
                             // printf ("Sector %u was accesed\n", clock_hand->sector);
                             clock_hand->accessed = false;
-                            cache_release_entry (clock_hand, EXCL);
+                            cache_release_entry (clock_hand, EXCL, false);
                         }
                     else
                         {
                             /* Write back to disk only when dirty. */
                             if (clock_hand->dirty)
-                                block_write (fs_device, clock_hand->sector,
-                                             clock_hand->data);
-                            
-                            /* Signal writers to be able to gain access after
-                               lock is released. */
-                            if (clock_hand->shared_waiters)
-                                cond_broadcast (&clock_hand->excl_done,
-                                                &clock_hand->lock);
+                                {
+                                    block_write (fs_device, clock_hand->sector,
+                                                 clock_hand->data);
+                                    clock_hand->dirty = false;
+                                }
 
                             struct cache_entry *evicted = clock_hand;
                             tick_clock_hand ();
