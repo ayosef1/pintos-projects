@@ -49,6 +49,8 @@ static int get_arg_int (void *esp, int pos);
 
 static bool is_valid_memory (void *buffer, unsigned size);
 static bool is_valid_address (void *uaddr);
+
+static bool is_valid_path (char *path);
 static bool is_valid_fd (int fd);
 
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
@@ -573,30 +575,12 @@ static char *
 get_arg_path (void *esp, int pos)
 {
   char *path;
-  char *path_cpy;
-  char *path_cpy_free;
 
   path = get_arg_string (esp, pos, INT_MAX);
-  // if (path == NULL)
-  //   return NULL;
-
-  // path_cpy = malloc (strlen (path) + 1);
-  // ASSERT (path_cpy != NULL);
-
-  // path_cpy_free = path_cpy;
-
-  // while (*path_cpy == '/')
-  //   path_cpy++;
-
-  // char *filename = NULL;
-  // char *save_ptr = NULL;
-  // for (filename = strtok_r (path_cpy, "/", &save_ptr);
-  //      filename != NULL;
-  //      filename = strtok_r (NULL, "/", &save_ptr))
-  //   if (strlen (filename) > NAME_MAX)
-  //     path = NULL;
-
-  // free (path_cpy_free);
+  /* Check that each file in the path has a name less than NAME_MAX. */
+  if (!is_valid_path (path))
+    return NULL;
+  
   return path;
 }
 
@@ -628,6 +612,43 @@ is_valid_address (void *vaddr)
                        && pagedir_get_page (thread_current ()->pagedir, vaddr);
 }
 
+/* Checks that every file in a path has a name
+   that does not exceed NAME_MAX characters. */
+static bool
+is_valid_path (char *path)
+{
+  bool valid = true;
+  char *path_cpy;
+  char *path_cpy_free;
+
+  if (path == NULL)
+    return false;
+  
+  int path_len = strlen (path) + 1;
+  path_cpy = malloc (path_len);
+  ASSERT (path_cpy != NULL);
+  path_cpy_free = path_cpy;
+  
+  strlcpy (path_cpy, path, path_len + 1);
+  while (*path_cpy == '/')
+    path_cpy++;
+
+  char *token = NULL;
+  char *save_ptr = NULL;
+  for (token = strtok_r (path_cpy, "/", &save_ptr);
+       token != NULL && *token != '\0';
+       token = strtok_r (NULL, "/", &save_ptr))
+    {
+      if (strlen (token) > NAME_MAX)
+        {
+          valid = false;
+          break;
+        }
+    }
+
+  free (path_cpy_free);
+  return valid;
+}
 /* Returns whether FD is between 0 and MAX_FILES */
 static bool
 is_valid_fd (int fd) 
