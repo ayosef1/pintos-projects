@@ -8,6 +8,7 @@
 #include "filesys/file.h"
 #include "filesys/inode.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
@@ -41,6 +42,7 @@ static int sys_inumber (uint32_t *esp);
 
 static void exit (int status);
 
+static char *get_arg_path (void *esp, int pos);
 static char *get_arg_string (void *esp, int pos, int limit);
 static void *get_arg_buffer (void *esp, int pos, int size);
 static int get_arg_int (void *esp, int pos);
@@ -175,8 +177,8 @@ sys_create (uint32_t *esp)
 {
   char *fname;
   off_t initial_size;
-
-  fname = get_arg_string (esp, 1, NAME_MAX);
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return false;
 
@@ -188,8 +190,9 @@ bool
 sys_remove (uint32_t *esp)
 {
   char *fname;
-  
-  fname = get_arg_string (esp, 1, NAME_MAX);
+
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return false;
 
@@ -203,7 +206,8 @@ sys_open (uint32_t *esp)
   char *fname;
   struct thread *cur;
 
-  fname = get_arg_string (esp, 1, NAME_MAX);
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return -1;
 
@@ -398,7 +402,8 @@ sys_chdir (uint32_t *esp)
   char *dirpath;
   struct dir *dir;
 
-  dirpath = get_arg_string (esp, 1, INT_MAX);
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  dirpath = get_arg_path (esp, 1);
   if (dirpath == NULL)
     return false;
 
@@ -417,7 +422,8 @@ sys_mkdir (uint32_t *esp)
 {
   char *dir;
 
-  dir = get_arg_string (esp, 1, INT_MAX);
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  dir = get_arg_path (esp, 1);
   if (dir == NULL)
     return false;
 
@@ -555,6 +561,43 @@ get_arg_string (void *esp, int pos, int limit)
     return NULL;
   
   return *str_ptr;
+}
+
+/* Returns path string at position POS on stack pointed at by ESP.
+   Paths can be arbitrarily long so it first extracts the path then
+   returns path if valid. Path is invalid if any of the string bytes 
+   are in invalid memory or any file names in the path are longer than
+   NAME_MAX. In the former case, calling thread is terminated and in the
+   latter NULL is returned. */
+static char *
+get_arg_path (void *esp, int pos)
+{
+  char *path;
+  char *path_cpy;
+  char *path_cpy_free;
+
+  path = get_arg_string (esp, pos, INT_MAX);
+  // if (path == NULL)
+  //   return NULL;
+
+  // path_cpy = malloc (strlen (path) + 1);
+  // ASSERT (path_cpy != NULL);
+
+  // path_cpy_free = path_cpy;
+
+  // while (*path_cpy == '/')
+  //   path_cpy++;
+
+  // char *filename = NULL;
+  // char *save_ptr = NULL;
+  // for (filename = strtok_r (path_cpy, "/", &save_ptr);
+  //      filename != NULL;
+  //      filename = strtok_r (NULL, "/", &save_ptr))
+  //   if (strlen (filename) > NAME_MAX)
+  //     path = NULL;
+
+  // free (path_cpy_free);
+  return path;
 }
 
 /* Returns whether bytes starting at START are in valid user space */
