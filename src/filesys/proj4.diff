@@ -1,0 +1,2678 @@
+--- /dev/null
++++ b/src/filesys/cache.c
+@@ -0,0 +1,426 @@
++#include <string.h>
++#include <stdio.h>
++#include "filesys/cache.h"
++#include "filesys/inode.h"
++#include "filesys/free-map.h"
++#include "threads/malloc.h"
++#include "threads/thread.h"
++
++#define CACHE_SIZE 64                       /* Size of buffer cache. */                             
++#define MAX_CLOCK_LOOPS 2                   /* Max number of iterations 
++                                               when in eviction. */     
++#define WRITE_BACK_PERIOD TIMER_FREQ * 30   /* Flush cache back to disk
++                                               every 30 seconds. */
++
++/* Synchronization when loading block sector into cache for race between
++   two processes that both can't find block sector in cache. Prevents double
++   loading of that block sector. */
++static struct lock get_new_lock;
++/* Buffer Cache Begin. */
++static struct cache_entry *cache_begin;
++/* Buffer cache end (for iteration). */
++static struct cache_entry *cache_end;
++/* Clock hand for eviction. */
++static struct cache_entry *clock_hand;
++/* Count of number in use. */
++static int cached_count;
++/* Filesystem device for filesys R/W. */
++extern struct block *fs_device;
++
++/* Queue of sectors to be read ahead by the read ahead thread. */
++struct list read_ahead_queue;
++/* Sync for read_ahead_queue. */
++struct lock read_ahead_lock;
++/* CV to put read ahead thread to sleep if no sectors to read. */
++struct condition read_ahead_cv;
++
++static struct cache_entry *cache_add_sector (block_sector_t sector, bool new);
++static struct cache_entry *cache_alloc (void);
++static struct cache_entry *evict_cache_entry (void);
++static void get_entry_sync (struct cache_entry *entry,
++                            enum cache_use_type type,
++                            bool write_back);
++static void tick_clock_hand (void);
++static void push_read_ahead_queue (block_sector_t);
++static void read_ahead_fn (void *aux UNUSED);
++static void write_back_fn (void *aux UNUSED);
++
++/* Entry in read ahead queue. */
++struct r_ahead_entry 
++    {
++        block_sector_t sector;                  /* Sector to read ahead. */
++        struct list_elem list_elem;             /* Read ahead queue elem. */
++    };
++
++void
++cache_init (void)
++{
++    struct cache_entry * cur;
++
++    cache_begin = calloc (CACHE_SIZE, sizeof (struct cache_entry));
++    if (cache_begin == NULL)
++        PANIC ("Unable to allocate filesys cache");
++    
++    /* Initializing statics. */
++    clock_hand = cache_begin;
++    cache_end = cache_begin + CACHE_SIZE;
++    lock_init (&get_new_lock);
++    cached_count = 0;
++
++    for (cur = cache_begin; cur < cache_end; cur++)
++        {
++            lock_init (&cur->lock);
++            cond_init (&cur->excl_done);
++            cond_init (&cur->no_refs);
++            cur->data = malloc (BLOCK_SECTOR_SIZE);
++            if (cur->data == NULL)
++                PANIC ("Unable to allocate cache block.");
++            /* All other members initialized to 0. */
++        }
++
++    list_init (&read_ahead_queue);
++    lock_init (&read_ahead_lock);
++    cond_init (&read_ahead_cv);
++
++    /* Create the cleanup thread. */
++    thread_create ("write_back", PRI_DEFAULT, write_back_fn, NULL);
++    thread_create ("read_ahead", PRI_DEFAULT, read_ahead_fn, NULL);
++}
++
++
++/* Returns a cache entry corresponding to SECTOR loading from disk if 
++   not already present. Applies appropriate synchronization and updates
++   to the entry's metadata based on use type TYPE.
++   If flag NEW is set, doesn't do initial search of cache to see if entry
++   there.
++
++   Reads ahead if TYPE isn't READ AHEAD and block SECTOR wasn't already
++   cached. */
++struct cache_entry *
++cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new,
++                 block_sector_t read_ahead_sector)
++{
++    /* Return a new entry. */
++    bool present = false;
++    struct cache_entry *entry;
++    /* Seach cache if present. */
++    if (!new)
++        {
++                for (entry = cache_begin; entry < cache_end; entry++)
++                    {
++                        lock_acquire (&entry->lock);
++                        if (entry->allocated && entry->sector == sector)
++                            {
++                                present = true;
++                                break;
++                            }
++                        lock_release (&entry->lock);
++                    }
++        }
++    
++    if (!present)
++        entry = cache_add_sector (sector, new);
++    
++    get_entry_sync (entry, type, false);
++    
++    /* Read ahead if it isn't present and not already reading ahead. */
++    if (!present && type != R_AHEAD)
++        push_read_ahead_queue (read_ahead_sector);
++    
++    if (type != EXCL)
++        lock_release (&entry->lock);
++        
++    return entry;
++}
++
++void
++cache_release_entry (struct cache_entry *entry, enum cache_use_type type,
++                     bool dirty)
++{
++    switch(type)
++        {
++            case(EXCL):
++                if (entry->shared_waiters != 0)
++                    /* Wake up every shared waiting thread. */
++                    cond_broadcast (&entry->excl_done, &entry->lock);
++                break;
++            case (SHARE):
++                lock_acquire (&entry->lock);
++                entry->shared_refs--;
++                /* Signal one excl waiter at a time. */
++                if (entry->shared_refs == 0 && entry->excl_waiters != 0)
++                    cond_signal (&entry->no_refs, &entry->lock);
++                break;
++            default:
++                break;
++        }
++
++    if (dirty)
++        entry->dirty = true;
++    
++    lock_release (&entry->lock);
++}
++
++/* Writes all dirty buffer cache entries to disk. If FILESYS_DONE flag set,
++   frees memory associated with cached block after written back and then
++   frees cache before returning. */
++void
++cache_write_to_disk (bool filesys_done)
++{
++    struct cache_entry *cur;
++    for (cur = cache_begin; cur < cache_end; cur++)
++        {
++            lock_acquire (&cur->lock);
++            if (cur->allocated)
++                {
++                    get_entry_sync (cur, EXCL, false);
++                    if (cur->dirty)
++                        {
++                            block_write (fs_device, cur->sector, cur->data);
++                            cur->dirty = false;
++                        }
++                    else if (filesys_done)
++                        {
++                            cur->allocated = false;
++                            free (cur->data);
++                        }
++
++                    cache_release_entry (cur, EXCL, false);
++                }
++            else
++                lock_release (&cur->lock);
++
++        }
++    
++    if (filesys_done)
++        free (cache_begin);
++}
++
++/* Gets a new cache entry for the sector SECTOR either via allocation or
++   eviction if no free cache entries and initializes metadata. If flag NEW
++   is set no read from disk and just zeroes out acquired cache entry. */
++static struct cache_entry *
++cache_add_sector (block_sector_t sector, bool new)
++{
++    struct cache_entry *new_entry;
++    lock_acquire (&get_new_lock);
++    /* Second check to account for race between two threads loading same
++       block sector into buffer cache. */
++    if (!new)
++        {
++            for (new_entry = cache_begin; new_entry < cache_end; new_entry++)
++                {
++
++                    /* No fine grain lock required here becuase must have the
++                    get_new_lock lock to change these members. */
++                    if (new_entry->allocated && new_entry->sector == sector)
++                        {
++                            /* Ordering very important. Acquire the the entry 
++                            lock before releasing get_new_lock so entry isn't 
++                            evicted between these two steps. */
++                            lock_acquire (&new_entry->lock);
++                            goto done;
++                        }
++                }
++        }
++
++    bool can_allocate = cached_count < CACHE_SIZE;
++    if (can_allocate)
++        new_entry = cache_alloc ();
++    /* Evict an entry. */
++    else
++        new_entry = evict_cache_entry ();
++    
++    if (new_entry == NULL)
++        PANIC ("Issue with getting new frame via %s, should never retrun NULL",
++               can_allocate ? "ALLOCATION" : "EVICTION");
++    
++    new_entry->sector = sector;
++
++    if (new)
++        memset (new_entry->data, 0, BLOCK_SECTOR_SIZE);
++    else
++        block_read (fs_device, sector, new_entry->data);
++
++    done:
++        lock_release (&get_new_lock);
++        return new_entry;
++}
++
++/* Iterates through cache and returns first free entry. Returns NULL if
++   no free entries. */
++static struct cache_entry *
++cache_alloc (void)
++{
++    struct cache_entry *candidate;
++    for (candidate = cache_begin; candidate < cache_end; candidate++)
++        {
++            lock_acquire (&candidate->lock);
++            if (!candidate->allocated)
++                {
++                    candidate->allocated = true;
++                    cached_count++;
++                    return candidate;
++                }
++            lock_release (&candidate->lock);
++        }
++    return NULL;
++}
++
++/* Runs the clock eviction algorithm on the array to find a frame to evict.
++   Writes frame back to the filesys if it is dirty and returns pointer to
++   cache_entry. */
++static struct cache_entry *
++evict_cache_entry (void)
++{
++    int loop_cnt = 0;
++    struct cache_entry *clock_start = clock_hand;
++    while (loop_cnt < MAX_CLOCK_LOOPS)
++        {
++            lock_acquire (&clock_hand->lock);
++            if (clock_hand->allocated)
++                {
++                    get_entry_sync (clock_hand, EXCL, true);
++                    /* Once executing this step it is guaranteed that if the
++                       accessed bit is not set that there is no one waiting
++                       for this entry. This is because if there are others
++                       waiting, they acquired while sleeping in get_entry_sync.
++                       If you sleep in get_entry_sync it means it was used
++                       before and so accessed will be set. Therefore no races
++                       starvation of threads waiting on this entry. */
++                    if (clock_hand->accessed)
++                        {
++                            // printf ("Sector %u was accesed\n", clock_hand->sector);
++                            clock_hand->accessed = false;
++                            cache_release_entry (clock_hand, EXCL, false);
++                        }
++                    else
++                        {
++                            /* Write back to disk only when dirty. */
++                            if (clock_hand->dirty)
++                                {
++                                    block_write (fs_device, clock_hand->sector,
++                                                 clock_hand->data);
++                                    clock_hand->dirty = false;
++                                }
++
++                            struct cache_entry *evicted = clock_hand;
++                            tick_clock_hand ();
++                            return evicted;
++                        }
++                }
++            else
++                {
++                    // printf ("In eviction sector %u was not allocated\n", clock_hand->sector);
++                    lock_release (&clock_hand->lock);
++                }
++
++            tick_clock_hand ();
++            if (clock_hand == clock_start)
++                loop_cnt++;
++        }
++    return NULL;
++}
++
++/* Synchronizes use of the cache entry ENTRY after the lock has been
++   acquired based on the TYPE of use and updates the ENTRY's metadata
++   depending on whether process waits or gains access.
++   
++   If type is EXCL:
++    Waits until the number of shared users has dropped to 0.
++   If type is SHARE
++    Checks that there aren't any processes already waiting exclusive access.
++    If there are, waits to be signaled after the first process wanting
++    exclusive access has completed.
++
++    Otherwise, no syncrhonization needed. */
++static void
++get_entry_sync (struct cache_entry *entry, enum cache_use_type type,
++                bool write_back)
++{
++    switch (type)
++        {
++            case (EXCL):
++                if (entry->shared_refs != 0 || entry->shared_waiters != 0)
++                    {
++                        entry->excl_waiters++;
++                        /* While to deal with supurious wakeup. */
++                        do
++                            cond_wait (&entry->no_refs, &entry->lock);
++                        while (entry->shared_refs != 0);
++                        entry->excl_waiters--;
++                    }
++                if (!write_back)
++                    entry->accessed = true;
++                break;
++            case (SHARE):
++                if (entry->excl_waiters != 0)
++                    {
++                        entry->shared_waiters++;
++                        cond_wait (&entry->excl_done, &entry->lock);
++                        entry->shared_waiters--;
++                    }
++                entry->shared_refs++;
++                entry->accessed = true;
++                break;
++            default:
++                break;
++        }
++}
++
++/* Moves the clock hand forward once in the ring buffer. */
++static void
++tick_clock_hand (void)
++{
++    if (++clock_hand == cache_end)
++        clock_hand = cache_begin;
++}
++
++static void
++push_read_ahead_queue (block_sector_t sector)
++{
++    struct r_ahead_entry *e = malloc (sizeof (struct r_ahead_entry));
++    if (e != NULL)
++        {
++            e->sector = sector;
++            lock_acquire (&read_ahead_lock);
++            list_push_back (&read_ahead_queue, &e->list_elem);
++            cond_signal (&read_ahead_cv, &read_ahead_lock);
++            lock_release (&read_ahead_lock);
++        }
++}
++
++/* Reads entry from the read ahead queue and reads entry into the buffer
++   cache. */
++static void
++read_ahead_fn (void *aux UNUSED)
++{
++    while (true)
++        {
++            lock_acquire (&read_ahead_lock);
++            while (list_empty (&read_ahead_queue))
++                cond_wait (&read_ahead_cv, &read_ahead_lock);
++            
++            struct list_elem *e = list_pop_front (&read_ahead_queue);
++            lock_release (&read_ahead_lock);
++            struct r_ahead_entry *entry = list_entry (e, struct r_ahead_entry,
++                                                      list_elem);
++            if (free_map_present (entry->sector))
++                {
++                    // printf ("Read ahead of sector %u", entry->sector);
++                    cache_get_entry (entry->sector, R_AHEAD, false, -1);
++                }
++            free (entry);
++        }
++}
++
++/* Periodically writes all dirty buffer cache entries to disk. */
++static void
++write_back_fn (void *aux UNUSED)
++{
++    while (true)
++        {
++            timer_sleep (WRITE_BACK_PERIOD);
++            cache_write_to_disk (false);
++        }
++}
+\ No newline at end of file
+diff --git a/src/filesys/cache.h b/src/filesys/cache.h
+new file mode 100644
+index 0000000..10dd335
+--- /dev/null
++++ b/src/filesys/cache.h
+@@ -0,0 +1,52 @@
++#ifndef FILESYS_CACHE_H
++#define FILESYS_CACHE_H
++
++#include "devices/block.h"
++#include "devices/timer.h"
++#include "filesys/off_t.h"
++#include "threads/synch.h"
++
++/* Different use types that determine how to synchronize access to
++   the cache entry on a call to cache_get_entry. */
++enum cache_use_type
++    {
++        EXCL,                         /* Exclusive Access. */
++        SHARE,                        /* Shared access. */
++        R_AHEAD,                      /* Read ahead. */
++    };
++
++/* An entry in the buffer cache. */
++struct cache_entry
++    {
++        block_sector_t sector;          /* Block sector represented. */
++        int shared_refs;                /* Number of shared references. */
++        int shared_waiters;             /* Number of processes waiting for
++                                           shared access. */
++        int excl_waiters;               /* Number processes waiting for
++                                           exclusive access. */
++        bool accessed;                  /* Accessed bit for eviction. */
++        bool dirty;                     /* Dirty bit for eviction and write
++                                           back. */
++        bool allocated;                 /* Whether cache_entry has been 
++                                           allocated. */
++        struct lock lock;               /* Lock to synchronize access to cache
++                                           entry metadata. */
++        struct condition excl_done;     /* Signal shared waiters who attempted
++                                           to access cache after an attempt
++                                           to gain exclusive access. */
++        struct condition no_refs;       /* Signal exclusive waiter to access
++                                           cache after shared use. */
++        uint8_t *data;                  /* Actual cached sector. */
++    };
++
++
++void cache_init (void);
++struct cache_entry *cache_get_entry (block_sector_t sector,
++                                     enum cache_use_type type,
++                                     bool new,
++                                     block_sector_t read_ahead_sector);
++void cache_release_entry (struct cache_entry *e, enum cache_use_type type,
++                          bool dirty);
++void cache_write_to_disk (bool filesys_done);
++
++#endif /* filesys/directory.h */
+\ No newline at end of file
+diff --git a/src/filesys/directory.c b/src/filesys/directory.c
+index 030c1c9..444327a 100644
+--- a/src/filesys/directory.c
++++ b/src/filesys/directory.c
+@@ -5,6 +5,7 @@
+ #include "filesys/filesys.h"
+ #include "filesys/inode.h"
+ #include "threads/malloc.h"
++#include "threads/thread.h"
+ 
+ /* A directory. */
+ struct dir 
+@@ -24,9 +25,22 @@ struct dir_entry
+ /* Creates a directory with space for ENTRY_CNT entries in the
+    given SECTOR.  Returns true if successful, false on failure. */
+ bool
+-dir_create (block_sector_t sector, size_t entry_cnt)
++dir_create (block_sector_t sector, block_sector_t parent_sector)
+ {
+-  return inode_create (sector, entry_cnt * sizeof (struct dir_entry));
++  struct dir *dir;
++  
++  if (!inode_create (sector, NUM_INITIAL_DIRENTS * sizeof (struct dir_entry),
++                     IS_DIR))
++    return false;
++  
++  dir = dir_open (inode_open (sector));
++  if (dir == NULL)
++    return false;
++  
++  dir_add (dir, ".", sector);
++  dir_add (dir, "..", parent_sector);
++  dir_close (dir);
++  return true;
+ }
+ 
+ /* Opens and returns the directory for the given INODE, of which
+@@ -178,6 +192,23 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
+   return success;
+ }
+ 
++static size_t
++get_num_dirents (struct dir *dir)
++{
++  struct dir_entry e;
++  size_t ofs;
++  size_t num_dirents;
++
++  ASSERT (dir != NULL);
++
++  num_dirents = 0;
++  for (ofs = 0; inode_read_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
++       ofs += sizeof e) 
++    if (e.in_use) 
++      num_dirents++;
++  return num_dirents - 2;
++}
++
+ /* Removes any entry for NAME in DIR.
+    Returns true if successful, false on failure,
+    which occurs only if there is no file with the given NAME. */
+@@ -200,6 +231,14 @@ dir_remove (struct dir *dir, const char *name)
+   inode = inode_open (e.inode_sector);
+   if (inode == NULL)
+     goto done;
++  
++  /* Not allowed to remove nonempty directories, cwd, 
++     or directories currently open in process. */
++  if (!inode_is_file (inode) && 
++      (get_num_dirents (dir_open (inode)) != 0 ||
++       thread_current ()->cwd == inode_get_inumber (inode) ||
++       inode_get_open_cnt (inode) > 1))
++    goto done;
+ 
+   /* Erase directory entry. */
+   e.in_use = false;
+@@ -222,11 +261,12 @@ bool
+ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
+ {
+   struct dir_entry e;
+-
+   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) 
+     {
+       dir->pos += sizeof e;
+-      if (e.in_use)
++      if (e.in_use && 
++          strcmp(e.name, ".") != 0 &&
++          strcmp(e.name, "..") != 0)
+         {
+           strlcpy (name, e.name, NAME_MAX + 1);
+           return true;
+@@ -234,3 +274,63 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
+     }
+   return false;
+ }
++
++/* Returns the dir struct associated with the directory 
++ * specified at pathname or NULL if an error is encountered. */
++struct dir *
++dir_pathname_lookup (const char *pathname) 
++{
++  char *pathname_cpy;
++  struct dir *dir = NULL;
++  
++  /* Dealing with absolute path. */
++  if (pathname[0] == '/')
++    {
++      while (*pathname == '/')
++        pathname++;
++      dir = dir_open_root ();
++    }
++  /* Dealing with relative path. */
++  else
++    dir = dir_open (inode_open (thread_current ()->cwd));
++
++  pathname_cpy = malloc (strlen (pathname) + 1);
++  ASSERT (pathname != NULL);
++
++  char *pathname_cpy_free = pathname_cpy;
++  strlcpy (pathname_cpy, pathname, strlen (pathname) + 1);
++
++  bool in_dir = true;
++  char *token = NULL;
++  char *save_ptr = NULL;
++  struct inode *inode = NULL;
++  for (token = strtok_r (pathname_cpy, "/", &save_ptr);
++       token != NULL && *token != '\0';
++       token = strtok_r (NULL, "/", &save_ptr))
++    {
++      /* Every dirent must be inside a directory. */
++      if (!in_dir)
++        {
++          dir = NULL;
++          inode_close (inode);
++          break;
++        }
++      
++      if (!dir_lookup (dir, token, &inode))
++        {
++          dir_close (dir);
++          dir = NULL;
++          break;
++        }
++      
++      dir_close (dir);
++      if (inode_is_file (inode))
++          in_dir = false;
++      else
++        dir = dir_open (inode);
++
++    }
++
++  free (pathname_cpy_free);
++  return dir;
++}
+\ No newline at end of file
+diff --git a/src/filesys/directory.h b/src/filesys/directory.h
+index 930acf9..50346b3 100644
+--- a/src/filesys/directory.h
++++ b/src/filesys/directory.h
+@@ -11,10 +11,12 @@
+    retained, but much longer full path names must be allowed. */
+ #define NAME_MAX 14
+ 
++/* Directories start off with two entries: '.' and '..' */
++#define NUM_INITIAL_DIRENTS 2
+ struct inode;
+ 
+ /* Opening and closing directories. */
+-bool dir_create (block_sector_t sector, size_t entry_cnt);
++bool dir_create (block_sector_t sector, block_sector_t parent_sector);
+ struct dir *dir_open (struct inode *);
+ struct dir *dir_open_root (void);
+ struct dir *dir_reopen (struct dir *);
+@@ -27,4 +29,6 @@ bool dir_add (struct dir *, const char *name, block_sector_t);
+ bool dir_remove (struct dir *, const char *name);
+ bool dir_readdir (struct dir *, char name[NAME_MAX + 1]);
+ 
++struct dir *dir_pathname_lookup(const char *pathname);
++
+ #endif /* filesys/directory.h */
+diff --git a/src/filesys/file.c b/src/filesys/file.c
+index d5fc10d..b6c95cc 100644
+--- a/src/filesys/file.c
++++ b/src/filesys/file.c
+@@ -1,5 +1,6 @@
+ #include "filesys/file.h"
+ #include <debug.h>
++#include "filesys/directory.h"
+ #include "filesys/inode.h"
+ #include "threads/malloc.h"
+ 
+@@ -166,3 +167,4 @@ file_tell (struct file *file)
+   ASSERT (file != NULL);
+   return file->pos;
+ }
++
+diff --git a/src/filesys/filesys.c b/src/filesys/filesys.c
+index 7a53f5f..2073431 100644
+--- a/src/filesys/filesys.c
++++ b/src/filesys/filesys.c
+@@ -2,15 +2,20 @@
+ #include <debug.h>
+ #include <stdio.h>
+ #include <string.h>
++#include "filesys/cache.h"
+ #include "filesys/file.h"
+ #include "filesys/free-map.h"
+ #include "filesys/inode.h"
+ #include "filesys/directory.h"
++#include "threads/thread.h"
++#include "threads/malloc.h"
+ 
+ /* Partition that contains the file system. */
+ struct block *fs_device;
+ 
+ static void do_format (void);
++static void split_path (const char *path, char **parent_dir_path,
++                        char **dirent);
+ 
+ /* Initializes the file system module.
+    If FORMAT is true, reformats the file system. */
+@@ -23,6 +28,7 @@ filesys_init (bool format)
+ 
+   inode_init ();
+   free_map_init ();
++  cache_init ();
+ 
+   if (format) 
+     do_format ();
+@@ -36,6 +42,7 @@ void
+ filesys_done (void) 
+ {
+   free_map_close ();
++  cache_write_to_disk (true);
+ }
+ 
+ /* Creates a file named NAME with the given INITIAL_SIZE.
+@@ -43,19 +50,42 @@ filesys_done (void)
+    Fails if a file named NAME already exists,
+    or if internal memory allocation fails. */
+ bool
+-filesys_create (const char *name, off_t initial_size) 
++filesys_create (const char *pathname, off_t initial_size, bool is_file) 
+ {
+-  block_sector_t inode_sector = 0;
+-  struct dir *dir = dir_open_root ();
+-  bool success = (dir != NULL
+-                  && free_map_allocate (1, &inode_sector)
+-                  && inode_create (inode_sector, initial_size)
+-                  && dir_add (dir, name, inode_sector));
+-  if (!success && inode_sector != 0) 
+-    free_map_release (inode_sector, 1);
+-  dir_close (dir);
++  char *filename;
++  char *parent_dir_path;
++  struct dir *parent_dir;
++  size_t inode_sector = 0;
++  bool success = false;
+ 
+-  return success;
++  split_path (pathname, &parent_dir_path, &filename);
++    /* Cannot create the root directory as a file. */
++  if (strcmp (parent_dir_path, "/") == 0 && strcmp (filename, "/") == 0)
++    goto done;
++  
++  parent_dir = dir_pathname_lookup (parent_dir_path);
++  if (parent_dir == NULL || !free_map_allocate (1, &inode_sector))
++    goto done;
++  
++  if (is_file)
++    success = inode_create (inode_sector, initial_size, IS_FILE);
++  else
++    {
++      block_sector_t parent_dir_sector = inode_get_inumber (dir_get_inode 
++                                                            (parent_dir));
++      success = dir_create (inode_sector, parent_dir_sector);
++    }
++
++  if (success)
++    success =  dir_add (parent_dir, filename, inode_sector);
++  
++  if (!success && inode_sector != 0) 
++    free_map_release (inode_sector);
++  
++  done:
++    free (parent_dir_path);
++    dir_close (parent_dir);
++    return success;
+ }
+ 
+ /* Opens the file with the given NAME.
+@@ -63,17 +93,47 @@ filesys_create (const char *name, off_t initial_size)
+    otherwise.
+    Fails if no file named NAME exists,
+    or if an internal memory allocation fails. */
+-struct file *
+-filesys_open (const char *name)
++bool
++filesys_open (const char *pathname, struct fdt_entry *fdt_entry)
+ {
+-  struct dir *dir = dir_open_root ();
+-  struct inode *inode = NULL;
++  char *filename;
++  char *parent_dir_path;
++  struct dir *parent_dir;
++  struct inode *inode;
++  bool success = false;
+ 
+-  if (dir != NULL)
+-    dir_lookup (dir, name, &inode);
+-  dir_close (dir);
++  // get_last_token (pathname, &parent_dir_path, &filename);
++  split_path (pathname, &parent_dir_path, &filename);
++  parent_dir = dir_pathname_lookup (parent_dir_path);
+ 
+-  return file_open (inode);
++  if (parent_dir == NULL)
++    goto open_done;
++
++  if (strcmp (filename, "/") == 0)
++    {
++      fdt_entry->fp.dir = dir_open_root ();
++      fdt_entry->type = DIR;
++      success = true;
++      
++    }
++  else if (dir_lookup (parent_dir, filename, &inode) && inode != NULL)
++    {
++      if (inode_is_file (inode))
++        {
++          fdt_entry->fp.file = file_open (inode);
++          fdt_entry->type = FILE;
++        }
++      else
++        {
++          fdt_entry->fp.dir = dir_open (inode);
++          fdt_entry->type = DIR;
++        }
++      success = fdt_entry->fp.file != NULL;
++    }
++  open_done:
++    dir_close (parent_dir);
++    free (parent_dir_path);
++    return success;
+ }
+ 
+ /* Deletes the file named NAME.
+@@ -81,23 +141,85 @@ filesys_open (const char *name)
+    Fails if no file named NAME exists,
+    or if an internal memory allocation fails. */
+ bool
+-filesys_remove (const char *name) 
++filesys_remove (const char *pathname) 
+ {
+-  struct dir *dir = dir_open_root ();
+-  bool success = dir != NULL && dir_remove (dir, name);
+-  dir_close (dir); 
+-
++  bool success = false;
++  char *filename;
++  char *parent_dir_path;
++  struct dir *parent_dir = NULL;
++  struct inode *file_inode = NULL;
++  
++  split_path (pathname, &parent_dir_path, &filename);
++  if (strcmp (parent_dir_path, "/") && strcmp (filename, "/") == 0)
++    {
++      free (parent_dir_path);
++      return false;
++    }
++  parent_dir = dir_pathname_lookup (parent_dir_path);
++  if (parent_dir != NULL)
++      success = dir_remove (parent_dir, filename); 
++  
++  free (parent_dir_path);
++  inode_close (file_inode);
++  dir_close (parent_dir);
+   return success;
+ }
+-
++
++
+ /* Formats the file system. */
+ static void
+ do_format (void)
+ {
+   printf ("Formatting file system...");
+   free_map_create ();
+-  if (!dir_create (ROOT_DIR_SECTOR, 16))
++  if (!dir_create (ROOT_DIR_SECTOR, ROOT_DIR_SECTOR))
+     PANIC ("root directory creation failed");
+   free_map_close ();
+   printf ("done.\n");
+ }
++
++/* Given a path PATH, assigns EXCEPT_LAST to be all but the last dirent 
++   and LAST to be the last dirent in PATH. */
++static void
++split_path (const char *path, char **parent_dir_path, char **dirent)
++{
++  int path_len = strlen (path);
++  char *last_slash;
++
++  /* Case 1: an absolute path to root directory. */
++  if (path_len == 1 && *path == '/')
++    {
++      *parent_dir_path = malloc (2);
++      ASSERT (*parent_dir_path != NULL);
++
++      *dirent = malloc (2);
++      ASSERT (*dirent != NULL);
++
++      strlcpy (*parent_dir_path, "/", 2);
++      *dirent = path;
++    }
++  /* Case 2: any path in format a/b/... or /a/b/... */
++  else if ((last_slash = strrchr (path, '/')) != NULL)
++  {
++    int dirent_len;
++    int parent_dir_path_len;
++
++    dirent_len = strlen (last_slash + 1);
++    parent_dir_path_len = path_len - dirent_len;
++
++    *parent_dir_path = malloc (parent_dir_path_len + 1);
++    ASSERT (*parent_dir_path != NULL);
++
++    *dirent = last_slash + 1;
++    strlcpy (*parent_dir_path, path, parent_dir_path_len + 1);
++  }
++  /* Case 3: relative path consisting of just the dirent */
++  else
++  {
++    *parent_dir_path = malloc (2);
++    ASSERT (*parent_dir_path != NULL);
++
++    *dirent =  path;
++    strlcpy (*parent_dir_path, ".", 2);
++  }
++}
+\ No newline at end of file
+diff --git a/src/filesys/filesys.dsk b/src/filesys/filesys.dsk
+new file mode 100644
+index 0000000..d80c3f1
+Binary files /dev/null and b/src/filesys/filesys.dsk differ
+diff --git a/src/filesys/filesys.h b/src/filesys/filesys.h
+index 455ac72..ad634a5 100644
+--- a/src/filesys/filesys.h
++++ b/src/filesys/filesys.h
+@@ -2,19 +2,24 @@
+ #define FILESYS_FILESYS_H
+ 
+ #include <stdbool.h>
++#include "threads/thread.h"
+ #include "filesys/off_t.h"
+ 
+ /* Sectors of system file inodes. */
+ #define FREE_MAP_SECTOR 0       /* Free map file inode sector. */
+ #define ROOT_DIR_SECTOR 1       /* Root directory file inode sector. */
+ 
++#define IS_FILE true
++#define IS_DIR false
++
+ /* Block device that contains the file system. */
+ extern struct block *fs_device;
+ 
+ void filesys_init (bool format);
+ void filesys_done (void);
+-bool filesys_create (const char *name, off_t initial_size);
+-struct file *filesys_open (const char *name);
+-bool filesys_remove (const char *name);
++bool filesys_create (const char *pathname, off_t initial_size, bool is_file);
++bool filesys_open (const char *pathname, struct fdt_entry *fdt_entry);
++bool filesys_remove (const char *pathname);
++bool filesys_mkdir (const char *dir);
+ 
+ #endif /* filesys/filesys.h */
+diff --git a/src/filesys/free-map.c b/src/filesys/free-map.c
+index 29ea4df..335b8fd 100644
+--- a/src/filesys/free-map.c
++++ b/src/filesys/free-map.c
+@@ -4,14 +4,18 @@
+ #include "filesys/file.h"
+ #include "filesys/filesys.h"
+ #include "filesys/inode.h"
++#include "threads/synch.h"
+ 
+ static struct file *free_map_file;   /* Free map file. */
+ static struct bitmap *free_map;      /* Free map, one bit per sector. */
++static struct lock free_map_lock;    /* Lock to synchronize access to free
++                                        map. */
+ 
+ /* Initializes the free map. */
+ void
+ free_map_init (void) 
+ {
++  lock_init (&free_map_lock);
+   free_map = bitmap_create (block_size (fs_device));
+   if (free_map == NULL)
+     PANIC ("bitmap creation failed--file system device is too large");
+@@ -27,26 +31,34 @@ free_map_init (void)
+ bool
+ free_map_allocate (size_t cnt, block_sector_t *sectorp)
+ {
+-  block_sector_t sector = bitmap_scan_and_flip (free_map, 0, cnt, false);
+-  if (sector != BITMAP_ERROR
+-      && free_map_file != NULL
+-      && !bitmap_write (free_map, free_map_file))
++  for (size_t i = 0; i < cnt; i++)
+     {
+-      bitmap_set_multiple (free_map, sector, cnt, false); 
+-      sector = BITMAP_ERROR;
++      lock_acquire (&free_map_lock);
++      block_sector_t sector = bitmap_scan_and_flip (free_map, 0, 1, false);
++      lock_release (&free_map_lock);
++      if (sector == BITMAP_ERROR)
++        {
++          for (off_t j = i - 1; j >= 0; j--)
++            {
++              free_map_release (sectorp[j]);
++            }
++          return false;
++        }
++      /* Put in reverse order for ease of use in block allocation
++         in fn inode_write_at (). */
++      sectorp[cnt - i -1] = sector;
+     }
+-  if (sector != BITMAP_ERROR)
+-    *sectorp = sector;
+-  return sector != BITMAP_ERROR;
++  return true;
+ }
+ 
+ /* Makes CNT sectors starting at SECTOR available for use. */
+ void
+-free_map_release (block_sector_t sector, size_t cnt)
++free_map_release (block_sector_t sector)
+ {
+-  ASSERT (bitmap_all (free_map, sector, cnt));
+-  bitmap_set_multiple (free_map, sector, cnt, false);
+-  bitmap_write (free_map, free_map_file);
++  lock_acquire (&free_map_lock);
++  ASSERT (bitmap_test (free_map, sector));
++  bitmap_reset (free_map, sector);
++  lock_release (&free_map_lock);
+ }
+ 
+ /* Opens the free map file and reads it from disk. */
+@@ -64,6 +76,9 @@ free_map_open (void)
+ void
+ free_map_close (void) 
+ {
++  /* File_close does not write back to disk at the moment. */
++  if (!bitmap_write (free_map, free_map_file))
++    PANIC ("can't write free map");
+   file_close (free_map_file);
+ }
+ 
+@@ -73,7 +88,7 @@ void
+ free_map_create (void) 
+ {
+   /* Create inode. */
+-  if (!inode_create (FREE_MAP_SECTOR, bitmap_file_size (free_map)))
++  if (!inode_create (FREE_MAP_SECTOR, bitmap_file_size (free_map), IS_FILE))
+     PANIC ("free map creation failed");
+ 
+   /* Write bitmap to file. */
+@@ -83,3 +98,14 @@ free_map_create (void)
+   if (!bitmap_write (free_map, free_map_file))
+     PANIC ("can't write free map");
+ }
++
++/* Returns whether the entry is present in the free map. */
++bool free_map_present (block_sector_t sector)
++{
++  bool present = false;
++  lock_acquire (&free_map_lock);
++  if (sector < bitmap_size (free_map))
++    present = bitmap_test (free_map, sector);
++  lock_release (&free_map_lock);
++  return present;
++}
+diff --git a/src/filesys/free-map.h b/src/filesys/free-map.h
+index 316cd1c..1af2c44 100644
+--- a/src/filesys/free-map.h
++++ b/src/filesys/free-map.h
+@@ -12,6 +12,8 @@ void free_map_open (void);
+ void free_map_close (void);
+ 
+ bool free_map_allocate (size_t, block_sector_t *);
+-void free_map_release (block_sector_t, size_t);
++void free_map_release (block_sector_t);
++
++bool free_map_present (block_sector_t sector);
+ 
+ #endif /* filesys/free-map.h */
+diff --git a/src/filesys/fsutil.c b/src/filesys/fsutil.c
+index df632df..fc3372b 100644
+--- a/src/filesys/fsutil.c
++++ b/src/filesys/fsutil.c
+@@ -39,9 +39,11 @@ fsutil_cat (char **argv)
+   char *buffer;
+ 
+   printf ("Printing '%s' to the console...\n", file_name);
+-  file = filesys_open (file_name);
+-  if (file == NULL)
++  struct fdt_entry fdt_entry;
++  if (!filesys_open (file_name, &fdt_entry))
+     PANIC ("%s: open failed", file_name);
++  
++  file = fdt_entry.fp.file;
+   buffer = palloc_get_page (PAL_ASSERT);
+   for (;;) 
+     {
+@@ -118,12 +120,13 @@ fsutil_extract (char **argv UNUSED)
+           printf ("Putting '%s' into the file system...\n", file_name);
+ 
+           /* Create destination file. */
+-          if (!filesys_create (file_name, size))
++          if (!filesys_create (file_name, size, true))
+             PANIC ("%s: create failed", file_name);
+-          dst = filesys_open (file_name);
+-          if (dst == NULL)
++          struct fdt_entry fdt_entry;
++          if (!filesys_open (file_name, &fdt_entry))
+             PANIC ("%s: open failed", file_name);
+ 
++          dst = fdt_entry.fp.file;
+           /* Do copy. */
+           while (size > 0)
+             {
+@@ -182,9 +185,11 @@ fsutil_append (char **argv)
+     PANIC ("couldn't allocate buffer");
+ 
+   /* Open source file. */
+-  src = filesys_open (file_name);
+-  if (src == NULL)
++  struct fdt_entry fdt_entry;
++  if (!filesys_open (file_name, &fdt_entry))
+     PANIC ("%s: open failed", file_name);
++  
++  src = fdt_entry.fp.file;
+   size = file_length (src);
+ 
+   /* Open target block device. */
+diff --git a/src/filesys/inode.c b/src/filesys/inode.c
+index 3463563..f0aace5 100644
+--- a/src/filesys/inode.c
++++ b/src/filesys/inode.c
+@@ -2,24 +2,54 @@
+ #include <list.h>
+ #include <debug.h>
+ #include <round.h>
++#include <stdio.h>
+ #include <string.h>
++#include "filesys/cache.h"
+ #include "filesys/filesys.h"
+ #include "filesys/free-map.h"
+ #include "threads/malloc.h"
++#include "threads/synch.h"
+ 
+ /* Identifies an inode. */
+ #define INODE_MAGIC 0x494e4f44
+ 
++/* All used for the multilevel index inode. */
++#define NUM_DIRECT_POINTERS 122
++/* Index of singly indirect block in inode. */
++#define SINGLE_INDIRECT_INDEX NUM_DIRECT_POINTERS
++/* Index of doublly indirect block in inode. */
++#define DOUBLE_INDIRECT_INDEX NUM_DIRECT_POINTERS + 1
++/* Number of block pointers in an inode. */
++#define NUM_BLOCK_POINTERS 124
++/* Number of block pointers in an indirect block. */
++#define POINTERS_PER_BLOCK  128
++/* Max number of indicies needed to get data block in inode. */
++#define MAX_INDICIES 3
++/* Max number of bytes a file can be. */
++#define MAX_FILE_BYTES (NUM_DIRECT_POINTERS + NUM_BLOCK_POINTERS + \
++                        NUM_BLOCK_POINTERS * NUM_BLOCK_POINTERS)   \
++                        * BLOCK_SECTOR_SIZE    
++
++
+ /* On-disk inode.
+    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
+ struct inode_disk
+   {
+-    block_sector_t start;               /* First data sector. */
+-    off_t length;                       /* File size in bytes. */
+-    unsigned magic;                     /* Magic number. */
+-    uint32_t unused[125];               /* Not used. */
++    off_t length;                               /* File size in bytes. */
++    block_sector_t blocks [NUM_BLOCK_POINTERS]; /* Block Pointers. */
++    bool is_file;                               /* Whether inode represents
++                                                   file or dir.*/
++    unsigned magic;                             /* Magic number. */
+   };
+ 
++static void inode_update_length (struct inode *inode, off_t write_end);
++static bool inode_check_extension (struct inode *inode, off_t write_end);
++static void free_inode_blocks (struct inode *inode);
++static void free_block (block_sector_t sector, off_t height);
++static off_t ofs_to_indicies (off_t ofs, off_t *indicies);
++static block_sector_t get_data_sector (block_sector_t inode_sector,
++                                       off_t offset, bool read);
++
+ /* Returns the number of sectors to allocate for an inode SIZE
+    bytes long. */
+ static inline size_t
+@@ -34,75 +64,73 @@ struct inode
+     struct list_elem elem;              /* Element in inode list. */
+     block_sector_t sector;              /* Sector number of disk location. */
+     int open_cnt;                       /* Number of openers. */
++    int write_cnt;                      /* Number of writers. */
+     bool removed;                       /* True if deleted, false otherwise. */
++    bool is_file;                       /* Is the inode a file or dir. */
+     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
+-    struct inode_disk data;             /* Inode content. */
++    struct condition no_writers;        /* Condition variable to appropriately
++                                           set deny_write_cnt. */
++    
++    struct lock deny_write_lock;        /* Sync for deny_write_cnt. */
++    struct lock extension_lock;         /* Sync for file extension. */
+   };
+ 
+-/* Returns the block device sector that contains byte offset POS
+-   within INODE.
+-   Returns -1 if INODE does not contain data for a byte at offset
+-   POS. */
+-static block_sector_t
+-byte_to_sector (const struct inode *inode, off_t pos) 
++/* Returns the logical index of the block that byte POS resides in
++   in an inode. */
++static inline off_t
++direct_idx (off_t pos) 
+ {
+-  ASSERT (inode != NULL);
+-  if (pos < inode->data.length)
+-    return inode->data.start + pos / BLOCK_SECTOR_SIZE;
+-  else
+-    return -1;
++  return pos / BLOCK_SECTOR_SIZE;
+ }
+ 
++/* Returns the offest within a singly indirect block the offset
++   LOGICAL_IDX from the first sector accessed via doubly indirect. */
++static inline off_t
++singly_indirect_idx (off_t logical_idx)
++{
++  return logical_idx % NUM_BLOCK_POINTERS;
++}
++
++/* Returns the offest within a doubly indirect block the offset
++   LOGICAL_IDX from the first sector accessed via doubly indirect. */
++static inline off_t
++doubly_indirect_idx (off_t logical_idx)
++{
++  return logical_idx / NUM_BLOCK_POINTERS;
++}
++
++
+ /* List of open inodes, so that opening a single inode twice
+    returns the same `struct inode'. */
+ static struct list open_inodes;
++/* Sync for the list of opening inodes. */
++static struct lock open_inodes_lock;
+ 
+ /* Initializes the inode module. */
+ void
+ inode_init (void) 
+ {
+   list_init (&open_inodes);
++  lock_init (&open_inodes_lock);
+ }
+ 
+-/* Initializes an inode with LENGTH bytes of data and
+-   writes the new inode to sector SECTOR on the file system
+-   device.
++/* Initializes an inode with LENGTH bytes of data.
+    Returns true if successful.
+-   Returns false if memory or disk allocation fails. */
++   Fails is LENGTH is not positive. */
+ bool
+-inode_create (block_sector_t sector, off_t length)
++inode_create (block_sector_t sector, off_t length, bool is_file)
+ {
+-  struct inode_disk *disk_inode = NULL;
+-  bool success = false;
++  struct cache_entry *inode_entry;
++  struct inode_disk *disk_inode;
+ 
+   ASSERT (length >= 0);
+-
+-  /* If this assertion fails, the inode structure is not exactly
+-     one sector in size, and you should fix that. */
+-  ASSERT (sizeof *disk_inode == BLOCK_SECTOR_SIZE);
+-
+-  disk_inode = calloc (1, sizeof *disk_inode);
+-  if (disk_inode != NULL)
+-    {
+-      size_t sectors = bytes_to_sectors (length);
+-      disk_inode->length = length;
+-      disk_inode->magic = INODE_MAGIC;
+-      if (free_map_allocate (sectors, &disk_inode->start)) 
+-        {
+-          block_write (fs_device, sector, disk_inode);
+-          if (sectors > 0) 
+-            {
+-              static char zeros[BLOCK_SECTOR_SIZE];
+-              size_t i;
+-              
+-              for (i = 0; i < sectors; i++) 
+-                block_write (fs_device, disk_inode->start + i, zeros);
+-            }
+-          success = true; 
+-        } 
+-      free (disk_inode);
+-    }
+-  return success;
++  inode_entry = cache_get_entry (sector, EXCL, true, -1);
++  disk_inode = (struct inode_disk  *) inode_entry->data;
++  disk_inode->length = length;
++  disk_inode->magic = INODE_MAGIC;
++  disk_inode->is_file = is_file;
++  cache_release_entry (inode_entry, EXCL, true);
++  return true;
+ }
+ 
+ /* Reads an inode from SECTOR
+@@ -115,16 +143,19 @@ inode_open (block_sector_t sector)
+   struct inode *inode;
+ 
+   /* Check whether this inode is already open. */
++  lock_acquire (&open_inodes_lock);
+   for (e = list_begin (&open_inodes); e != list_end (&open_inodes);
+        e = list_next (e)) 
+     {
+       inode = list_entry (e, struct inode, elem);
+       if (inode->sector == sector) 
+         {
+-          inode_reopen (inode);
++          inode->open_cnt++;
++          lock_release (&open_inodes_lock);
+           return inode; 
+         }
+     }
++  lock_release (&open_inodes_lock);
+ 
+   /* Allocate memory. */
+   inode = malloc (sizeof *inode);
+@@ -132,12 +163,24 @@ inode_open (block_sector_t sector)
+     return NULL;
+ 
+   /* Initialize. */
+-  list_push_front (&open_inodes, &inode->elem);
+   inode->sector = sector;
+   inode->open_cnt = 1;
++  inode->write_cnt = 0;
+   inode->deny_write_cnt = 0;
+   inode->removed = false;
+-  block_read (fs_device, inode->sector, &inode->data);
++  lock_init (&inode->deny_write_lock);
++  lock_init (&inode->extension_lock);
++  cond_init (&inode->no_writers);
++
++  struct cache_entry *inode_entry = cache_get_entry (sector, SHARE, false, -1);
++  struct inode_disk *disk_inode = (struct inode_disk  *) inode_entry->data;
++  inode->is_file = disk_inode->is_file;
++  cache_release_entry (inode_entry, SHARE, false);
++
++  lock_acquire (&open_inodes_lock);
++  list_push_front (&open_inodes, &inode->elem);
++  lock_release (&open_inodes_lock);
++
+   return inode;
+ }
+ 
+@@ -145,8 +188,12 @@ inode_open (block_sector_t sector)
+ struct inode *
+ inode_reopen (struct inode *inode)
+ {
+-  if (inode != NULL)
++  if (inode != NULL) 
++  {
++    lock_acquire (&open_inodes_lock);
+     inode->open_cnt++;
++    lock_release (&open_inodes_lock);
++  }
+   return inode;
+ }
+ 
+@@ -157,6 +204,13 @@ inode_get_inumber (const struct inode *inode)
+   return inode->sector;
+ }
+ 
++/* Returns number of times inode has been opened. */
++int
++inode_get_open_cnt (const struct inode *inode)
++{
++  return inode->open_cnt;
++}
++
+ /* Closes INODE and writes it to disk.
+    If this was the last reference to INODE, frees its memory.
+    If INODE was also a removed inode, frees its blocks. */
+@@ -168,21 +222,22 @@ inode_close (struct inode *inode)
+     return;
+ 
+   /* Release resources if this was the last opener. */
++  lock_acquire (&open_inodes_lock);
+   if (--inode->open_cnt == 0)
+     {
+-      /* Remove from inode list and release lock. */
+-      list_remove (&inode->elem);
+- 
+-      /* Deallocate blocks if removed. */
+-      if (inode->removed) 
+-        {
+-          free_map_release (inode->sector, 1);
+-          free_map_release (inode->data.start,
+-                            bytes_to_sectors (inode->data.length)); 
+-        }
+-
+-      free (inode); 
++        list_remove (&inode->elem);
++        lock_release (&open_inodes_lock);
++
++        /* Deallocate blocks if removed. */
++        if (inode->removed) 
++          {
++            free_inode_blocks (inode);
++            /* Need to do recursion through blocks to release. */
++          }
++        free (inode);
++        return;
+     }
++  lock_release (&open_inodes_lock);
+ }
+ 
+ /* Marks INODE to be deleted when it is closed by the last caller who
+@@ -202,12 +257,10 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
+ {
+   uint8_t *buffer = buffer_;
+   off_t bytes_read = 0;
+-  uint8_t *bounce = NULL;
+ 
+   while (size > 0) 
+     {
+       /* Disk sector to read, starting byte offset within sector. */
+-      block_sector_t sector_idx = byte_to_sector (inode, offset);
+       int sector_ofs = offset % BLOCK_SECTOR_SIZE;
+ 
+       /* Bytes left in inode, bytes left in sector, lesser of the two. */
+@@ -219,24 +272,19 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
+       int chunk_size = size < min_left ? size : min_left;
+       if (chunk_size <= 0)
+         break;
+-
+-      if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
+-        {
+-          /* Read full sector directly into caller's buffer. */
+-          block_read (fs_device, sector_idx, buffer + bytes_read);
+-        }
+-      else 
++      
++      block_sector_t sector_idx = get_data_sector (inode->sector, offset, true);
++      if (sector_idx == 0)
++          memset(buffer + bytes_read, 0, chunk_size);
++      else
+         {
+-          /* Read sector into bounce buffer, then partially copy
+-             into caller's buffer. */
+-          if (bounce == NULL) 
+-            {
+-              bounce = malloc (BLOCK_SECTOR_SIZE);
+-              if (bounce == NULL)
+-                break;
+-            }
+-          block_read (fs_device, sector_idx, bounce);
+-          memcpy (buffer + bytes_read, bounce + sector_ofs, chunk_size);
++          block_sector_t read_ahead_sector = get_data_sector (inode->sector,
++                                                              offset + BLOCK_SECTOR_SIZE,
++                                                              true);
++          struct cache_entry *to_read = cache_get_entry (sector_idx, SHARE,
++                                                         false, read_ahead_sector);
++          memcpy (buffer + bytes_read, to_read->data + sector_ofs, chunk_size);
++          cache_release_entry (to_read, SHARE, false);
+         }
+       
+       /* Advance. */
+@@ -244,35 +292,36 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
+       offset += chunk_size;
+       bytes_read += chunk_size;
+     }
+-  free (bounce);
+-
+   return bytes_read;
+ }
+ 
+ /* Writes SIZE bytes from BUFFER into INODE, starting at OFFSET.
+    Returns the number of bytes actually written, which may be
+    less than SIZE if end of file is reached or an error occurs.
+-   (Normally a write at end of file would extend the inode, but
+-   growth is not yet implemented.) */
++   Write to end of file extends teh inode. */
+ off_t
+ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
+                 off_t offset) 
+ {
+   const uint8_t *buffer = buffer_;
+   off_t bytes_written = 0;
+-  uint8_t *bounce = NULL;
+ 
++  lock_acquire (&inode->deny_write_lock);
+   if (inode->deny_write_cnt)
+-    return 0;
++    {
++      lock_release (&inode->deny_write_lock);
++      return 0;
++    }
++  inode->write_cnt++;
++  lock_release (&inode->deny_write_lock);
+ 
+   while (size > 0) 
+     {
+       /* Sector to write, starting byte offset within sector. */
+-      block_sector_t sector_idx = byte_to_sector (inode, offset);
+       int sector_ofs = offset % BLOCK_SECTOR_SIZE;
+ 
+       /* Bytes left in inode, bytes left in sector, lesser of the two. */
+-      off_t inode_left = inode_length (inode) - offset;
++      off_t inode_left = MAX_FILE_BYTES - offset;
+       int sector_left = BLOCK_SECTOR_SIZE - sector_ofs;
+       int min_left = inode_left < sector_left ? inode_left : sector_left;
+ 
+@@ -281,38 +330,42 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
+       if (chunk_size <= 0)
+         break;
+ 
+-      if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE)
+-        {
+-          /* Write full sector directly to disk. */
+-          block_write (fs_device, sector_idx, buffer + bytes_written);
+-        }
+-      else 
++      /* Does checking of extension need to be synchronized. */
++      bool extension = inode_check_extension (inode, offset + chunk_size);
++      
++      block_sector_t sector_id = get_data_sector (inode->sector, offset, false);
++      if (sector_id == 0)
+         {
+-          /* We need a bounce buffer. */
+-          if (bounce == NULL) 
+-            {
+-              bounce = malloc (BLOCK_SECTOR_SIZE);
+-              if (bounce == NULL)
+-                break;
+-            }
+-
+-          /* If the sector contains data before or after the chunk
+-             we're writing, then we need to read in the sector
+-             first.  Otherwise we start with a sector of all zeros. */
+-          if (sector_ofs > 0 || chunk_size < sector_left) 
+-            block_read (fs_device, sector_idx, bounce);
+-          else
+-            memset (bounce, 0, BLOCK_SECTOR_SIZE);
+-          memcpy (bounce + sector_ofs, buffer + bytes_written, chunk_size);
+-          block_write (fs_device, sector_idx, bounce);
++          if (extension)
++            lock_release (&inode->extension_lock);
++          break;
+         }
++      
++      /* Always a shared write because other extension lock acquired and
++         other readers won't have access because length isn't updated. */
++      block_sector_t read_ahead_sector = get_data_sector (inode->sector,
++                                                          offset + BLOCK_SECTOR_SIZE,
++                                                          false);
++      struct cache_entry *entry_to_write = cache_get_entry (sector_id, SHARE,
++                                                            false, read_ahead_sector);
++      memcpy (entry_to_write->data + sector_ofs, buffer + bytes_written,
++              chunk_size);
++      cache_release_entry (entry_to_write, SHARE, true);
+ 
+       /* Advance. */
+       size -= chunk_size;
+       offset += chunk_size;
+       bytes_written += chunk_size;
++      if (extension)
++        inode_update_length (inode, offset);
+     }
+-  free (bounce);
++
++    /* Signal any process waiting to deny file write. */
++    lock_acquire (&inode->deny_write_lock);
++    if (--inode->write_cnt == 0)
++      cond_signal (&inode->no_writers, &inode->deny_write_lock);
++    lock_release (&inode->deny_write_lock);
++  
+ 
+   return bytes_written;
+ }
+@@ -322,8 +375,12 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
+ void
+ inode_deny_write (struct inode *inode) 
+ {
++  lock_acquire (&inode->deny_write_lock);
++  while (inode->write_cnt != 0)
++    cond_wait (&inode->no_writers, &inode->deny_write_lock);
+   inode->deny_write_cnt++;
+   ASSERT (inode->deny_write_cnt <= inode->open_cnt);
++  lock_release (&inode->deny_write_lock);
+ }
+ 
+ /* Re-enables writes to INODE.
+@@ -332,14 +389,303 @@ inode_deny_write (struct inode *inode)
+ void
+ inode_allow_write (struct inode *inode) 
+ {
++  lock_acquire (&inode->deny_write_lock);
+   ASSERT (inode->deny_write_cnt > 0);
+   ASSERT (inode->deny_write_cnt <= inode->open_cnt);
+   inode->deny_write_cnt--;
++  lock_release (&inode->deny_write_lock);
+ }
+ 
+-/* Returns the length, in bytes, of INODE's data. */
++/* Whenever accessing the inode length we need to update it on disk as well
++   becaue don't want disk to not have up to date inode length. Might as well
++   keep inode length as something stored on disk. */
+ off_t
+ inode_length (const struct inode *inode)
+ {
+-  return inode->data.length;
++  off_t inode_length;
++  struct cache_entry * cache_entry = cache_get_entry (inode->sector, SHARE,
++                                                      false, -1);
++  struct inode_disk *data = (struct inode_disk *) cache_entry->data;
++  inode_length = data->length;
++  cache_release_entry (cache_entry, SHARE, false);
++  return inode_length;
++}
++
++bool
++inode_is_file (const struct inode *inode)
++{
++  return inode->is_file;
++}
++
++/* Atomically checks inode INODE's length and acquires the extension lock
++   if the write about to happen is longer than WRITE_END. */
++static bool
++inode_check_extension (struct inode *inode, off_t write_end)
++{
++  bool extension = false;
++  struct cache_entry * inode_entry = cache_get_entry (inode->sector, EXCL,
++                                                      false, -1);
++  struct inode_disk *data = (struct inode_disk *) inode_entry->data;
++  if (write_end > data->length)
++    {
++      lock_acquire (&inode->extension_lock);
++      extension = true;
++    }
++  cache_release_entry (inode_entry, EXCL, false);
++  return extension;
+ }
++
++/* Update the inode INODE's length to WRITE_END and releases the extension
++   lock. */
++static void
++inode_update_length (struct inode *inode, off_t write_end)
++{
++    struct cache_entry * inode_entry = cache_get_entry (inode->sector, EXCL,
++                                                        false, -1);
++    struct inode_disk *data = (struct inode_disk *) inode_entry->data;
++    data->length = write_end;
++    cache_release_entry (inode_entry, EXCL, true);
++    lock_release (&inode->extension_lock);
++}
++
++/* Calculates the indicies required to find the level indicies of the
++   block that byte OFS resides in. 
++   
++   Returns the number of indicies needed to access the data block.
++   1 means a OFS is accessed via a directly indexed block in the inode.
++   2 means a OFS is accessed via singly indirect indexed block in the inode.
++   3 means a OFS is accessed via doubly indirect indexed block in the inode. */
++static off_t
++ofs_to_indicies (off_t ofs, off_t *indicies)
++{
++  off_t logical_idx = direct_idx (ofs);
++  if (logical_idx < NUM_DIRECT_POINTERS)
++    {
++      indicies[0] = logical_idx;
++      return 1;
++    }
++  logical_idx -= NUM_DIRECT_POINTERS;
++
++  if (logical_idx < NUM_BLOCK_POINTERS)
++    {
++      indicies[0] = SINGLE_INDIRECT_INDEX;
++      indicies[1] = logical_idx;
++      return 2;
++    }
++  else
++    {
++      logical_idx -= NUM_DIRECT_POINTERS;
++      indicies[0] = DOUBLE_INDIRECT_INDEX;
++      indicies[1] = doubly_indirect_idx (logical_idx);
++      indicies[2] = singly_indirect_idx (logical_idx);
++      return 3;
++      
++    }
++}
++
++/* Set the block pointer at offset BLOCK_OFS in block sector BLOCK to
++   SECTOR. */
++static block_sector_t
++get_block_ptr (void *block, off_t block_ofs, bool inode)
++{
++  if (inode)
++    {
++      struct inode_disk *disk_inode = (struct inode_disk *) block;
++      return disk_inode->blocks[block_ofs];
++    }
++  else
++    {
++      block_sector_t *blocks = (block_sector_t *) block;
++      return blocks[block_ofs];
++    }
++}
++
++/* Set the block pointer at offset BLOCK_OFS in block sector BLOCK to
++   SECTOR. */
++static void
++set_block_ptr (void *block, off_t block_ofs, block_sector_t sector,
++               bool inode)
++{
++  if (inode)
++    {
++      struct inode_disk *disk_inode = (struct inode_disk *) block;
++      disk_inode->blocks[block_ofs] = sector;
++    }
++  else
++    {
++      block_sector_t *blocks = (block_sector_t *) block;
++      blocks[block_ofs] = sector;
++    }
++}
++
++/* Allocate and initalize new sectors with sector numbers in NEW_SECTORS.
++   Start with the data block at START_DEPTH and move upwards until the parent
++   of the newly allocated block is at STOP DEPTH.  */
++static void
++allocate_new_blocks (block_sector_t *new_sectors, off_t *indicies,
++                     off_t start_depth, off_t stop_depth)
++{
++  struct cache_entry *parent_entry;
++  block_sector_t *parent_sector;
++  block_sector_t *child_sector = new_sectors;
++  int parent_depth = start_depth;
++
++  bool new = true;
++  bool dirty = false;
++
++  struct cache_entry *data_entry = cache_get_entry (*new_sectors, EXCL, new, -1);
++  cache_release_entry (data_entry, EXCL, dirty);
++  parent_depth--;
++  new_sectors++;
++
++  /* Create parent block and write in the appropriate entry.
++      Start from lowest depth to so satisfy the recoverability criteria.
++      Dirty true because setting block pointer. */
++  dirty = true;
++  while (parent_depth > stop_depth)
++    {
++      parent_sector = new_sectors;
++      parent_entry = cache_get_entry (*parent_sector, EXCL, new, -1);
++      set_block_ptr (parent_entry->data, indicies[parent_depth],
++                     *child_sector, false);
++      cache_release_entry (parent_entry, EXCL, dirty);
++      child_sector = parent_sector;
++      parent_depth--;
++      new_sectors++;
++    }
++}
++
++/* Recursively frees block sector SECTOR that is at height HEIGHT from
++   free map.
++
++   Height 0 corresponds to a data block. Height > 0 is the level of
++   indirection of the block. */
++static void
++free_block (block_sector_t sector, off_t height)
++{
++  if (sector == 0)
++    return;
++  
++  if (height > 0)
++    {
++      struct cache_entry *indirect_entry = cache_get_entry (sector, SHARE,
++                                                            false, -1);
++      uint8_t *block = indirect_entry->data;
++      height--;
++      block_sector_t cur_sector;
++      for (off_t i = 0; i < NUM_BLOCK_POINTERS; i++)
++        {
++          cur_sector = get_block_ptr (block, i, false);
++          free_block (cur_sector, height);
++        }
++      cache_release_entry (indirect_entry, false, false);
++    }
++  free_map_release (sector);
++}
++
++/* Frees all blocks assocaited with inode INODE from the free map as well
++   as inode itself. */
++static void
++free_inode_blocks (struct inode *inode)
++{
++  /* Do SHARE so no deadlock when getting entries at level below.
++     Little bit hacky because should be exclusive access but no one
++     else can access this block when this call is made so OK. */
++  struct cache_entry *inode_entry = cache_get_entry (inode->sector, SHARE,
++                                                     false, -1);
++  struct inode_disk *inode_disk = (struct inode_disk *) inode_entry->data;
++
++  off_t last_direct_idx = direct_idx (inode_disk->length);
++  off_t inode_stop_idx;
++
++  if (last_direct_idx < NUM_DIRECT_POINTERS)
++    inode_stop_idx = last_direct_idx;
++  else if (last_direct_idx < NUM_DIRECT_POINTERS + NUM_BLOCK_POINTERS)
++    inode_stop_idx = SINGLE_INDIRECT_INDEX;
++  else
++    inode_stop_idx = DOUBLE_INDIRECT_INDEX;
++
++  block_sector_t cur_sector;
++  off_t height = 0;
++  off_t cur_idx = 0;
++  while (cur_idx <= inode_stop_idx)
++    {
++      if (cur_idx == SINGLE_INDIRECT_INDEX)
++        height = 1;
++      else if (cur_idx == DOUBLE_INDIRECT_INDEX)
++        height = 2;
++
++      cur_sector = get_block_ptr (inode_disk, cur_idx, true);
++      free_block (cur_sector, height);
++      cur_idx++;
++    }
++
++  free_map_release (inode->sector);
++  cache_release_entry (inode_entry, SHARE, false);
++}
++
++
++
++/* Return the block number of the block that holds the byte at offset OFFSET
++   in the data represented by the inode that lives at sector INODE_SECTOR.
++   
++   Flag READ determines what to do when a block is found to be unallocated.
++   If READ is true, then 0 is returned.
++   If READ is false, the data block and the relevant indirect blocks not
++   yet allocated are allocated. */
++static block_sector_t
++get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
++{
++  off_t indicies[MAX_INDICIES];
++  off_t num_indicies = ofs_to_indicies (offset, indicies);
++
++  int cur_depth = 0;
++  block_sector_t cur_sector = inode_sector;
++  struct cache_entry *cur = cache_get_entry (cur_sector, SHARE, false, -1);
++
++  block_sector_t child_sector = get_block_ptr (cur->data, indicies[cur_depth],
++                                               true);
++  cache_release_entry (cur, SHARE, false);
++
++  /* Iterate through the indicies to get the data block number. */
++  while (cur_depth < num_indicies - 1 && child_sector != 0)
++    {
++      cur = cache_get_entry (child_sector, SHARE, false, -1);
++      cur_sector = child_sector;
++
++      cur_depth++;
++      child_sector = get_block_ptr (cur->data, indicies[cur_depth], false);
++      cache_release_entry (cur, SHARE, false);
++    }
++    
++  if (read)
++    return child_sector;
++
++  /* If all blocks allocated, return the found sector. */
++  if (child_sector != 0)
++    return child_sector;
++
++  /* Get the necessary free blocks from free map. */
++  int num_to_create = num_indicies - cur_depth;
++  block_sector_t new_sectors[num_to_create];
++  if (!free_map_allocate (num_to_create, new_sectors))
++      return 0;
++
++  /* First allocated block given to data. */
++  block_sector_t data_sector = new_sectors[0];
++
++  allocate_new_blocks (new_sectors, indicies, num_indicies, cur_depth);
++
++  /* Last case. If parent_depth == 0, inode, different logic to set ptr.
++      Exclusive lock needed because the block exists already. */
++  bool cur_is_inode = cur_depth == 0;
++
++  cur = cache_get_entry (cur_sector, EXCL, false, -1);
++  set_block_ptr (cur->data, indicies[cur_depth],
++                  new_sectors[num_to_create - 1],
++                  cur_is_inode);
++  cache_release_entry (cur, EXCL, true);
++    
++  return data_sector;
++}
++
+diff --git a/src/filesys/inode.h b/src/filesys/inode.h
+index cb42310..b386305 100644
+--- a/src/filesys/inode.h
++++ b/src/filesys/inode.h
+@@ -8,10 +8,12 @@
+ struct bitmap;
+ 
+ void inode_init (void);
+-bool inode_create (block_sector_t, off_t);
++bool inode_create (block_sector_t, off_t, bool is_file);
+ struct inode *inode_open (block_sector_t);
+ struct inode *inode_reopen (struct inode *);
+ block_sector_t inode_get_inumber (const struct inode *);
++int inode_get_open_cnt (const struct inode *);
++bool inode_is_file (const struct inode *);
+ void inode_close (struct inode *);
+ void inode_remove (struct inode *);
+ off_t inode_read_at (struct inode *, void *, off_t size, off_t offset);
+diff --git a/src/filesys/setup_testing.sh b/src/filesys/setup_testing.sh
+new file mode 100755
+index 0000000..324bae2
+--- /dev/null
++++ b/src/filesys/setup_testing.sh
+@@ -0,0 +1,10 @@
++#!/bin/bash
++rm -f filesys.dsk
++rm -f swap.dsk
++rm -f filesys.dsk.lock
++rm -f swap.dsk.lock
++pintos-mkdisk filesys.dsk --filesys-size=2
++pintos-mkdisk swap.dsk --swap-size=4
++pintos -f -q
++pintos -p build/tests/userprog/args-none -a test -- -q
++
+diff --git a/src/threads/thread.c b/src/threads/thread.c
+index 4750a64..717e358 100644
+--- a/src/threads/thread.c
++++ b/src/threads/thread.c
+@@ -9,6 +9,7 @@
+ #include "threads/interrupt.h"
+ #include "threads/intr-stubs.h"
+ #include "threads/palloc.h"
++#include "threads/malloc.h"
+ #include "threads/switch.h"
+ #include "threads/synch.h"
+ #include "threads/vaddr.h"
+@@ -16,6 +17,8 @@
+ #include "userprog/process.h"
+ #include "userprog/syscall.h"
+ #include "filesys/file.h"
++#include "filesys/filesys.h"
++#include "filesys/directory.h"
+ #endif
+ 
+ /* Random value for struct thread's `magic' member.
+@@ -117,7 +120,7 @@ thread_init (void)
+   ASSERT (intr_get_level () == INTR_OFF);
+ 
+   /* Initialize system load average at system boot. */
+-  load_avg = int_to_fp(0);
++  load_avg = int_to_fp (0);
+ 
+   /* Naturally, there are zero ready threads at boot. */
+   num_ready = 0;
+@@ -618,15 +621,12 @@ init_thread (struct thread *t, const char *name, int priority)
+ 
+   #ifdef USERPROG
+     t->exit_status = 0;
+-    memset (t->fdtable, 0, sizeof (*t->fdtable));
+-    /* Set fd = 0 to an invalid ptr */
+-    t->fdtable[RESERVED_FD] = (void *)THREAD_MAGIC;
+-    /* First two FDs reserved */
+-    t->next_fd = EXEC_FD + 1;
+-  
+     list_init (&t->children);
+   #endif
+ 
++  #ifdef FILESYS
++    t->cwd = ROOT_DIR_SECTOR;
++  #endif
+   /* Initialize the list of locks held by current list*/
+   list_init (&t->locks_held);
+ 
+@@ -659,6 +659,23 @@ init_child (struct thread *t)
+ 
+       list_push_back (&thread_current ()->children, &exit_info->child_elem);
+       t->exit_info = exit_info;
++
++      void *fdtable = calloc (MAX_FILES, sizeof (struct fdt_entry));
++      if (fdtable == NULL)
++        {
++          palloc_free_page (exit_info);
++          return false;
++        }
++      
++      t->fdtable = fdtable;
++      /* Set fd = 0 to an invalid ptr */
++      t->fdtable[RESERVED_FD].type = RESERVED;
++      /* First two FDs reserved */
++      t->next_fd = EXEC_FD + 1;
++
++      #ifdef FILESYS
++        t->cwd = thread_current ()->cwd;
++      #endif
+     }
+   return true;
+ }
+@@ -841,7 +858,7 @@ thread_update_next_fd (struct thread *t)
+   int next_fd = EXEC_FD + 1;
+   for (; next_fd < MAX_FILES; next_fd++) 
+     {
+-      if (t->fdtable[next_fd] == NULL)
++      if (t->fdtable[next_fd].fp.file == NULL)
+       {
+         t->next_fd = next_fd;
+         return;
+@@ -856,17 +873,17 @@ thread_update_next_fd (struct thread *t)
+ void
+ thread_close_fd (struct thread *t, int fd)
+ {
+-  struct file *fp = t->fdtable[fd];
+-
++  struct fdt_entry *fdt_entry = t->fdtable + fd;
+   /* Have previously closed the given file descriptor. */
+-  if (fp == NULL)
++  if (fdt_entry->fp.file == NULL)
+     return;
+   
+-  lock_acquire (&filesys_lock);
+-  file_close (fp);
+-  lock_release (&filesys_lock);
++  if (fdt_entry->type == FILE)
++    file_close (fdt_entry->fp.file);
++  else
++    dir_close (fdt_entry->fp.dir);
+ 
+-  t->fdtable[fd] = NULL;
++  fdt_entry->fp.file = NULL;
+ 
+   if (fd < t->next_fd)
+     t->next_fd = fd;
+diff --git a/src/threads/thread.h b/src/threads/thread.h
+index acebc8f..b194f58 100644
+--- a/src/threads/thread.h
++++ b/src/threads/thread.h
+@@ -4,6 +4,7 @@
+ #include <debug.h>
+ #include <list.h>
+ #include <stdint.h>
++#include "devices/block.h"
+ #include "threads/fixed-point.h"
+ #include "threads/synch.h"
+ 
+@@ -73,6 +74,29 @@ struct child_exit_info
+         struct list_elem child_elem;            /* List element for parent's
+                                                    children list. */
+     };
++
++/* The type of an file descriptor, either file, directory or reserved. */
++enum fd_type
++   {
++      FILE,
++      DIR,
++      RESERVED,
++   };
++
++/* A pointer to either a file or a directory in the file
++   descriptor table.  */
++union fdt_ptr
++   {
++      struct file *file;
++      struct dir *dir;
++   };
++
++/* Entry in the file descriptor table. */
++struct fdt_entry
++   {
++      union fdt_ptr fp;          /* Directory or File Pointer. */
++      enum fd_type type;         /* Type of File Descriptor Table Entry. */
++   };
+     
+ /* A kernel thread or user process.
+ 
+@@ -166,11 +190,15 @@ struct thread
+    int exit_status;                    /* Exit status of thread. */
+    struct list children;               /* List of children's exit 
+                                           information. */
+-   struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
++   struct fdt_entry *fdtable;          /* File Descriptor Table. */
+    struct child_exit_info *exit_info;  /* Thread's exit information shared with
+                                           parent. */
+ #endif
+ 
++#ifdef FILESYS
++   block_sector_t cwd;
++#endif
++
+     /* Owned by thread.c. */
+     unsigned magic;                     /* Detects stack overflow. */
+   };
+diff --git a/src/userprog/process.c b/src/userprog/process.c
+index bf18910..18f91af 100644
+--- a/src/userprog/process.c
++++ b/src/userprog/process.c
+@@ -16,6 +16,7 @@
+ #include "threads/flags.h"
+ #include "threads/init.h"
+ #include "threads/interrupt.h"
++#include "threads/malloc.h"
+ #include "threads/palloc.h"
+ #include "threads/thread.h"
+ #include "threads/vaddr.h"
+@@ -185,13 +186,25 @@ process_exit (void)
+     }
+ 
+   /* Close all file descriptors. */
+-  for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
++  /* Close all file descriptors. */
++  struct fdt_entry *cur_entry;
++  if (cur->fdtable)
+     {
+-      if (cur->fdtable[fd] != NULL)
++      struct fdt_entry *cur_entry;
++      for (off_t fd = EXEC_FD; fd < MAX_FILES; fd++)
+         {
+-          file_close (cur->fdtable[fd]);
+-          cur->fdtable[fd] = NULL;
++          cur_entry = cur->fdtable + fd;
++          if (cur_entry->fp.file != NULL)
++            {
++              if (cur_entry->type == DIR)
++                dir_close (cur_entry->fp.dir);
++              else
++                file_close (cur_entry->fp.file);
++              
++              cur_entry->fp.file = NULL;
++            }
+         }
++      free (cur->fdtable);
+     }
+   
+   /* Release all locks held by thread. */
+@@ -330,15 +343,17 @@ load (struct process_arg *args, void (**eip) (void), void **esp)
+   process_activate ();
+ 
+   /* Open executable file. */
+-  lock_acquire(&filesys_lock);
+-  file = filesys_open (args->exec_name);
++  struct fdt_entry *exec_fdt_entry = thread_current ()->fdtable + EXEC_FD;
+ 
+-  if (file == NULL) 
++  if (!filesys_open (args->exec_name, exec_fdt_entry)) 
+     {
+       printf ("load: %s: open failed\n", args->exec_name);
+       goto done;
+     }
+ 
++  ASSERT (exec_fdt_entry->type == FILE);
++  file = exec_fdt_entry->fp.file;
++
+   file_deny_write (file);
+   /* Read and verify executable header. */
+   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
+@@ -422,10 +437,7 @@ load (struct process_arg *args, void (**eip) (void), void **esp)
+   success = true;
+ 
+  done:
+-  /* We arrive here whether the load is successful or not. */
+-  lock_release (&filesys_lock);
+-  
+-  thread_current ()->fdtable[EXEC_FD] = file;
++  /* We arrive here whether the load is successful or not. */  
+   return success;
+ }
+ 
+diff --git a/src/userprog/syscall.c b/src/userprog/syscall.c
+index 2500157..1bcd75a 100644
+--- a/src/userprog/syscall.c
++++ b/src/userprog/syscall.c
+@@ -6,7 +6,9 @@
+ #include "filesys/directory.h"
+ #include "filesys/filesys.h"
+ #include "filesys/file.h"
++#include "filesys/inode.h"
+ #include "threads/interrupt.h"
++#include "threads/malloc.h"
+ #include "threads/palloc.h"
+ #include "threads/synch.h"
+ #include "threads/thread.h"
+@@ -15,6 +17,8 @@
+ #include "userprog/process.h"
+ #include "userprog/syscall.h"
+ 
++/*TODO: only here for INT_MAX since pathnames can be arbitrarily long. */
++#include <limits.h>
+ static void syscall_handler (struct intr_frame *);
+ 
+ static void sys_halt (void);
+@@ -30,16 +34,25 @@ static int sys_write (uint32_t *esp);
+ static void sys_seek (uint32_t *esp);
+ static unsigned sys_tell (uint32_t *esp);
+ static void sys_close (uint32_t *esp);
++static bool sys_chdir (uint32_t *esp);
++static bool sys_mkdir (uint32_t *esp);
++static bool sys_readdir (uint32_t *esp);
++static bool sys_isdir (uint32_t *esp);
++static int sys_inumber (uint32_t *esp);
+ 
+ static void exit (int status);
+ 
++static char *get_arg_path (void *esp, int pos);
+ static char *get_arg_string (void *esp, int pos, int limit);
+ static void *get_arg_buffer (void *esp, int pos, int size);
+ static int get_arg_int (void *esp, int pos);
+ 
+ static bool is_valid_memory (void *buffer, unsigned size);
+ static bool is_valid_address (void *uaddr);
++
++static bool is_valid_path (char *path);
+ static bool is_valid_fd (int fd);
++static bool is_valid_file_fdt_entry (struct fdt_entry *fdt_entry);
+ 
+ #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
+ 
+@@ -47,7 +60,6 @@ void
+ syscall_init (void) 
+ {
+   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+-  lock_init (&filesys_lock);
+ }
+ 
+ static void
+@@ -100,6 +112,21 @@ syscall_handler (struct intr_frame *f)
+     case SYS_CLOSE:
+       sys_close (f->esp);
+       break;
++    case SYS_CHDIR:
++      f->eax = sys_chdir (f->esp);
++      break;
++    case SYS_MKDIR:
++      f->eax = sys_mkdir (f->esp);
++      break;
++    case SYS_READDIR:
++      f->eax = sys_readdir (f->esp);
++      break;
++    case SYS_ISDIR:
++      f->eax = sys_isdir (f->esp);
++      break;
++    case SYS_INUMBER:
++      f->eax = sys_inumber (f->esp);
++      break;
+     default:
+       exit (-1);
+   }
+@@ -151,67 +178,53 @@ sys_wait (uint32_t *esp)
+ bool
+ sys_create (uint32_t *esp)
+ {
+-  bool ret;
+   char *fname;
+   off_t initial_size;
+-
+-  fname = get_arg_string (esp, 1, NAME_MAX);
++  /*TODO: pathname can be much longer than NAME_MAX*/
++  fname = get_arg_path (esp, 1);
+   if (fname == NULL)
+     return false;
+ 
+   initial_size = get_arg_int (esp, 2);
+-  lock_acquire (&filesys_lock);
+-  ret = filesys_create (fname, initial_size);
+-  lock_release (&filesys_lock);
+-  return ret;
++  return filesys_create (fname, initial_size, IS_FILE);
+ }
+ 
+ bool
+ sys_remove (uint32_t *esp)
+ {
+-  bool ret;
+   char *fname;
+-  
+-  fname = get_arg_string (esp, 1, NAME_MAX);
++
++  /*TODO: pathname can be much longer than NAME_MAX*/
++  fname = get_arg_path (esp, 1);
+   if (fname == NULL)
+     return false;
+ 
+-  lock_acquire (&filesys_lock);
+-  ret = filesys_remove (fname);
+-  lock_release (&filesys_lock);
+-  return ret;
++  return filesys_remove (fname);
+ }
+ 
+ int
+ sys_open (uint32_t *esp)
+ {
+-  int ret;
+   char *fname;
+   struct thread *cur;
+ 
+-  fname = get_arg_string (esp, 1, NAME_MAX);
++  /*TODO: pathname can be much longer than NAME_MAX*/
++  fname = get_arg_path (esp, 1);
+   if (fname == NULL)
+     return -1;
+ 
+   cur = thread_current ();
+   /* No available FDs. */
+-  if (cur->next_fd < 0)
++  int fd = cur->next_fd;
++  if (fd < 0)
+     return -1;
+ 
+-  lock_acquire (&filesys_lock);
+-  struct file *fp = filesys_open (fname);
+-  lock_release (&filesys_lock);
+-
+-  /* File open unsuccessful or file limit hit */
+-  if (fp == NULL)
++  if (!filesys_open (fname, cur->fdtable + fd))
+     return -1;
+-
+-  ret = cur->next_fd;
+-  cur->fdtable[ret] = fp;
+   
+   thread_update_next_fd (cur);
+ 
+-  return ret;
++  return fd;
+ 
+ }
+ 
+@@ -222,17 +235,14 @@ sys_filesize (uint32_t *esp)
+   int size;
+   
+   fd = get_arg_int (esp, 1);
+-
+   if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
+     exit (-1);
+   
+-  struct file *file = thread_current ()->fdtable[fd];
+-	if (file == NULL)
+-		exit (-1);
++  struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
++  if (!is_valid_file_fdt_entry (fdt_entry))
++    exit (-1);
+   
+-  lock_acquire (&filesys_lock);
+-	size = file_length (file);
+-  lock_release (&filesys_lock);
++	size = file_length (fdt_entry->fp.file);
+   
+   return size;
+ }
+@@ -240,7 +250,6 @@ sys_filesize (uint32_t *esp)
+ int
+ sys_read (uint32_t *esp)
+ {
+-
+   int fd;
+   uint8_t *buffer;
+   unsigned size;
+@@ -264,15 +273,13 @@ sys_read (uint32_t *esp)
+     }
+   else
+     {
+-        struct thread *cur = thread_current ();
+-        struct file *fp = cur->fdtable[fd];
++      struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
++      if (!is_valid_file_fdt_entry (fdt_entry))
++        return -1;
+ 
+-        if (fp == NULL)
+-          return -1;
++      bytes_read = file_read(fdt_entry->fp.file, buffer,
++                              size);
+ 
+-        lock_acquire (&filesys_lock);
+-        bytes_read = file_read(fp, buffer, size);
+-        lock_release (&filesys_lock);
+     }
+   
+   return bytes_read;
+@@ -305,20 +312,17 @@ sys_write (uint32_t *esp)
+           int to_write = remaining > BUF_MAX ? BUF_MAX : remaining;
+           putbuf (buffer, to_write);
+           remaining -= to_write;
++          buffer += to_write;
+         }
+       bytes_written = size;
+     }
+   else 
+     {
+-      struct thread *cur = thread_current ();
+-      struct file *fp = cur->fdtable[fd];
+-
+-      if (fp == NULL) 
++      struct fdt_entry *fdt_entry =  thread_current ()->fdtable + fd;
++      if (!is_valid_file_fdt_entry (fdt_entry))
+         return -1;
+-
+-      lock_acquire (&filesys_lock);
+-      bytes_written = file_write(fp, buffer, size);
+-      lock_release (&filesys_lock);
++      bytes_written = file_write(fdt_entry->fp.file, buffer,
++                                 size);
+     }
+ 
+   return bytes_written;
+@@ -335,10 +339,11 @@ sys_seek (uint32_t *esp)
+   pos = get_arg_int (esp, 2);
+   cur = thread_current ();
+ 
+-  if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
++  struct fdt_entry *fdt_entry = cur->fdtable + fd;
++  if (!is_valid_fd(fd) || !is_valid_file_fdt_entry (fdt_entry))
+     exit (-1);
+   
+-  file_seek (cur->fdtable[fd], pos);
++  file_seek (fdt_entry->fp.file, pos);
+ }
+ 
+ static unsigned
+@@ -350,10 +355,11 @@ sys_tell (uint32_t *esp)
+   fd = get_arg_int (esp, 1);
+   cur = thread_current ();
+ 
+-  if (cur->fdtable[fd] == NULL)
++  struct fdt_entry *fdt_entry = cur->fdtable + fd;
++  if (!is_valid_fd(fd) || !is_valid_file_fdt_entry (fdt_entry))
+     exit (-1);
+ 
+-  return file_tell (cur->fdtable[fd]);
++  return file_tell (fdt_entry->fp.file);
+ }
+ 
+ static void
+@@ -371,6 +377,99 @@ sys_close (uint32_t *esp)
+   
+ }
+ 
++  /* TODO: using INT_MAX since pathname shouldn't have a limit. */
++static bool
++sys_chdir (uint32_t *esp)
++{
++  char *dirpath;
++  struct dir *dir;
++
++  /*TODO: pathname can be much longer than NAME_MAX*/
++  dirpath = get_arg_path (esp, 1);
++  if (dirpath == NULL)
++    return false;
++
++  dir = dir_pathname_lookup (dirpath);
++
++  if (dir == NULL)
++    return false;
++
++  thread_current ()->cwd = inode_get_inumber (dir_get_inode (dir));
++  dir_close (dir);
++  return true;
++}
++
++static bool
++sys_mkdir (uint32_t *esp)
++{
++  char *dir;
++
++  /*TODO: pathname can be much longer than NAME_MAX*/
++  dir = get_arg_path (esp, 1);
++  if (dir == NULL)
++    return false;
++
++  return filesys_create (dir, 0, IS_DIR);
++}
++
++static bool
++sys_readdir (uint32_t *esp)
++{
++  int fd;
++  char *buffer;
++  struct fdt_entry *fdt_entry;
++
++  fd = get_arg_int (esp, 1);
++  if (!is_valid_fd (fd))
++    return false;
++
++  fdt_entry = thread_current ()->fdtable + fd;
++  if (fdt_entry->type != DIR || fdt_entry->fp.dir == NULL)
++    return false;
++  
++  buffer = get_arg_buffer (esp, 2, NAME_MAX + 1);
++  bool result = dir_readdir (fdt_entry->fp.dir, buffer);
++  
++  return result;
++}
++
++static bool
++sys_isdir (uint32_t *esp)
++{
++  int fd;
++
++  fd = get_arg_int (esp, 1);
++
++  struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
++  if (fdt_entry->fp.file == NULL)
++    exit (-1);
++
++  return fdt_entry->type == DIR;
++}
++
++static int
++sys_inumber (uint32_t *esp)
++{
++  int fd;
++  struct inode *inode;
++
++  fd = get_arg_int (esp, 1);
++
++  struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
++  if (fdt_entry->fp.file == NULL)
++    return false;
++  
++  if (fdt_entry->type == DIR)
++    inode = dir_get_inode (fdt_entry->fp.dir);
++  else  
++    inode = file_get_inode (fdt_entry->fp.file);
++  
++  if (inode == NULL)
++    return false;
++  
++  return inode_get_inumber (inode);
++}
++
+ /* Returns the int at position POS on stack pointed at
+    by ESP. Exits is any of int bytes are in invalid
+    memory. */
+@@ -415,29 +514,51 @@ get_arg_string (void *esp, int pos, int limit)
+ 
+   str_ptr = (char **)esp + pos;
+ 
+-  /* Check the bytes of the char * are all in valid memory */
+-  if (!is_valid_memory (str_ptr, sizeof (char *)) || !is_valid_address(*str_ptr))
++  /* Check the bytes of the char * are all in valid memory. */
++  if (!is_valid_memory (str_ptr, sizeof (char *))
++      || !is_valid_address(*str_ptr))
+     exit (-1);
+ 
++  /* Empty string. */
++  if (**str_ptr == '\0')
++    return NULL;
++
+   end = *str_ptr + limit + 1;
+-  
+-  for (cur = *str_ptr + 1; cur < end; cur++)
++  for (cur = *str_ptr; cur < end; cur++)
+     {
+       if (pg_ofs(cur) == 0 && !is_valid_address (cur))
+         exit (-1);
+       
+       if (*cur == '\0')
+         break;
+-      
+     }
+   
+-  /* Either empty string of greater than LIMIT */
+-  if (cur == *str_ptr || cur == end)
++  /* String of longer than LIMIT */
++  if (cur == end)
+     return NULL;
+   
+   return *str_ptr;
+ }
+ 
++/* Returns path string at position POS on stack pointed at by ESP.
++   Paths can be arbitrarily long so it first extracts the path then
++   returns path if valid. Path is invalid if any of the string bytes 
++   are in invalid memory or any file names in the path are longer than
++   NAME_MAX. In the former case, calling thread is terminated and in the
++   latter NULL is returned. */
++static char *
++get_arg_path (void *esp, int pos)
++{
++  char *path;
++
++  path = get_arg_string (esp, pos, INT_MAX);
++  /* Check that each file in the path has a name less than NAME_MAX. */
++  if (!is_valid_path (path))
++    return NULL;
++  
++  return path;
++}
++
+ /* Returns whether bytes starting at START are in valid user space */
+ static bool 
+ is_valid_memory (void *start, unsigned size)
+@@ -466,9 +587,54 @@ is_valid_address (void *vaddr)
+                        && pagedir_get_page (thread_current ()->pagedir, vaddr);
+ }
+ 
++/* Checks that every file in a path has a name
++   that does not exceed NAME_MAX characters. */
++static bool
++is_valid_path (char *path)
++{
++  bool valid = true;
++  char *path_cpy;
++  char *path_cpy_free;
++
++  if (path == NULL)
++    return false;
++  
++  int path_len = strlen (path) + 1;
++  path_cpy = malloc (path_len);
++  ASSERT (path_cpy != NULL);
++  path_cpy_free = path_cpy;
++  
++  strlcpy (path_cpy, path, path_len + 1);
++  while (*path_cpy == '/')
++    path_cpy++;
++
++  char *token = NULL;
++  char *save_ptr = NULL;
++  for (token = strtok_r (path_cpy, "/", &save_ptr);
++       token != NULL && *token != '\0';
++       token = strtok_r (NULL, "/", &save_ptr))
++    {
++      if (strlen (token) > NAME_MAX)
++        {
++          valid = false;
++          break;
++        }
++    }
++
++  free (path_cpy_free);
++  return valid;
++}
+ /* Returns whether FD is between 0 and MAX_FILES */
+ static bool
+ is_valid_fd (int fd) 
+ {
+   return fd >= 0 && fd < MAX_FILES;
+ }
++
++/* Checks whether the file descriptor table entry FDT_ENTRY is a file
++   and points to a valid file. */
++static bool
++is_valid_file_fdt_entry (struct fdt_entry *fdt_entry)
++{
++    return fdt_entry->fp.file != NULL && fdt_entry->type == FILE;
++}
+\ No newline at end of file
+diff --git a/src/userprog/syscall.h b/src/userprog/syscall.h
+index d8b425d..702a6c7 100644
+--- a/src/userprog/syscall.h
++++ b/src/userprog/syscall.h
+@@ -2,8 +2,6 @@
+ #define USERPROG_SYSCALL_H
+ 
+ typedef int pid_t;
+-/* Coarse grain lock for filesystem access */
+-struct lock filesys_lock;
+ 
+ void syscall_init (void);
+ 
