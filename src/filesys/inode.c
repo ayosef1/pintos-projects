@@ -399,6 +399,18 @@ inode_length (const struct inode *inode)
   return inode_length;
 }
 
+bool
+inode_is_file (const struct inode *inode)
+{
+  bool is_file;
+  struct cache_entry *cache_entry = cache_get_entry (inode->sector, SHARE,
+                                                     false);
+  struct inode_disk *data = (struct inode_disk *) cache_entry->data;
+  is_file = data->is_file;
+  cache_release_entry (cache_entry, SHARE, false);
+  return is_file;
+}
+
 /* Atomically checks inode INODE's length and acquires the extension lock
    if the write about to happen is longer than WRITE_END. */
 static bool

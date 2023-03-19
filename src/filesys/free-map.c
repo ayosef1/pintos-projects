@@ -102,9 +102,10 @@ free_map_create (void)
 /* Returns whether the entry is present in the free map. */
 bool free_map_present (block_sector_t sector)
 {
-  bool present;
+  bool present = false;
   lock_acquire (&free_map_lock);
-  present = bitmap_test (free_map, sector);
+  if (sector < bitmap_size (free_map))
+    present = bitmap_test (free_map, sector);
   lock_release (&free_map_lock);
   return present;
 }
