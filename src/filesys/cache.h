@@ -31,8 +31,11 @@ struct cache_entry
                                            allocated. */
         struct lock lock;               /* Lock to synchronize access to cache
                                            entry metadata. */
-        struct condition excl_done;     /* Signal waiting. */
-        struct condition no_refs;       /* For eviction, when on. */
+        struct condition excl_done;     /* Signal shared waiters who attempted
+                                           to access cache after an attempt
+                                           to gain exclusive access. */
+        struct condition no_refs;       /* Signal exclusive waiter to access
+                                           cache after shared use. */
         uint8_t *data;                  /* Actual cached sector. */
     };
 

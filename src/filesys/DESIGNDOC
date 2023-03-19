@@ -104,30 +104,6 @@ Changes to inode.c:
                                                extension of inode and updating
                                                inode length atomic. */
 ------------------------------------------------------------------------------
-Changes to cache.h:
-
-    Added new enum to represent different use types that determine how to 
-    synchronize access to the cache entry on a call to cache_get_entry:
-
-        enum cache_use_type
-            {
-                EXCL,                         /* Exclusive access. */
-                SHARE,                        /* Shared exclusive access. */
-                R_AHEAD,                      /* Read ahead. */
-            };
-    
-    Added members to `struct cache`
-        int shared_waiters;             /* Number of processes waiting for
-                                           shared access. */
-        int excl_waiters;               /* Number processes waiting for
-                                           exclusive access. */
-        struct condition excl_done;     /* Signal shared waiterss who attempted
-                                           to access cache after an attempt
-                                           to gain exclusive access.. */
-
-    
-
-------------------------------------------------------------------------------
 Changes to free_map.c
 
     static struct lock free_map_lock;    /* Lock to synchronize access to free
@@ -268,6 +244,37 @@ This was supported by similar design choices made by Unix in their filesystem.
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+/* Directories start off with two entries: '.' and '..' */
+#define NUM_INITIAL_DIRENTS 2
+
+/* Macros to improve readbility of functions that have logic conditioned
+   on whether file or directory. */
+#define IS_FILE true
+#define IS_DIR false
+
+    /* The type of an file descriptor, either file, directory or reserved. */
+    enum fd_type
+        {
+            FILE,
+            DIR,
+            RESERVED,
+        };
+
+    /* A pointer to either a file or a directory in the file
+    descriptor table.  */
+    union fdt_ptr
+        {
+            struct file *file;
+            struct dir *dir;
+        };
+
+    /* Entry in the file descriptor table. */
+    struct fdt_entry
+        {
+            union fdt_ptr fp;          /* Directory or File Pointer. */
+            enum fd_type type;         /* File Descriptor Table Entry Type. */
+        };
+
 ---- ALGORITHMS ----
 
 >> B2: Describe your code for traversing a user-specified path.  How
@@ -314,6 +321,10 @@ struct cache_entry
     {
         block_sector_t sector;          /* Block sector represented. */
         int shared_refs;                /* Number of shared references. */
+        int shared_waiters;             /* Number of processes waiting for
+                                           shared access. */
+        int excl_waiters;               /* Number processes waiting for
+                                           exclusive access. */
         bool accessed;                  /* Accessed bit for eviction. */
         bool dirty;                     /* Dirty bit for eviction and write
                                            back. */
@@ -321,7 +332,11 @@ struct cache_entry
                                            allocated. */
         struct lock lock;               /* Lock to synchronize access to cache
                                            entry metadata. */
-        struct condition no_refs;       /* For eviction, when on. */
+        struct condition excl_done;     /* Signal shared waiters who attempted
+                                           to access cache after an attempt
+                                           to gain exclusive access. */
+        struct condition no_refs;       /* Signal exclusive waiter to access
+                                           cache after shared use. */
         uint8_t *data;                  /* Actual cached sector. */
     };
 

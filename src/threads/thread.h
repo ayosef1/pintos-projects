@@ -74,6 +74,7 @@ struct child_exit_info
         struct list_elem child_elem;            /* List element for parent's
                                                    children list. */
     };
+
 /* The type of an file descriptor, either file, directory or reserved. */
 enum fd_type
    {

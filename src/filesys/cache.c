@@ -341,7 +341,7 @@ get_entry_sync (struct cache_entry *entry, enum cache_use_type type,
     switch (type)
         {
             case (EXCL):
-                if (entry->shared_refs != 0)
+                if (entry->shared_refs != 0 || entry->shared_waiters != 0)
                     {
                         entry->excl_waiters++;
                         /* While to deal with supurious wakeup. */
