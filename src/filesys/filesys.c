@@ -50,40 +50,42 @@ filesys_done (void)
    Fails if a file named NAME already exists,
    or if internal memory allocation fails. */
 bool
-filesys_create (const char *pathname, off_t initial_size) 
+filesys_create (const char *pathname, off_t initial_size, bool is_file) 
 {
   char *filename;
   char *parent_dir_path;
   struct dir *parent_dir;
   size_t inode_sector = 0;
+  bool success = false;
 
-  // get_last_token (pathname, &parent_dir_path, &filename);
   split_path (pathname, &parent_dir_path, &filename);
-  
-  /* Cannot create the root directory as a file. */
+    /* Cannot create the root directory as a file. */
   if (strcmp (parent_dir_path, "/") == 0 && strcmp (filename, "/") == 0)
-    return false;
+    goto done;
+  
+  parent_dir = dir_pathname_lookup (parent_dir_path);
+  if (parent_dir == NULL || !free_map_allocate (1, &inode_sector))
+    goto done;
+  
+  if (is_file)
+    success = inode_create (inode_sector, initial_size, IS_FILE);
   else
     {
-      parent_dir = dir_pathname_lookup (parent_dir_path);
-      if (parent_dir == NULL)
-        {
-          free (parent_dir_path);
-          free (filename);
-          return false;
-        }
+      block_sector_t parent_dir_sector = inode_get_inumber (dir_get_inode 
+                                                            (parent_dir));
+      success = dir_create (inode_sector, parent_dir_sector, INITIAL_DIRENTS);
     }
-  bool success = (parent_dir != NULL
-                  && free_map_allocate (1, &inode_sector)
-                  && inode_create (inode_sector, initial_size, IS_FILE)
-                  && dir_add (parent_dir, filename, inode_sector));
+
+  if (success)
+    success =  dir_add (parent_dir, filename, inode_sector);
+  
   if (!success && inode_sector != 0) 
     free_map_release (inode_sector);
   
-  free (parent_dir_path);
-  free (filename);
-  dir_close (parent_dir);
-  return success;
+  done:
+    free (parent_dir_path);
+    dir_close (parent_dir);
+    return success;
 }
 
 /* Opens the file with the given NAME.
@@ -113,7 +115,6 @@ filesys_open (const char *pathname)
         fp = file_open (file_inode);
     }
   dir_close (parent_dir);
-  free (filename);
   free (parent_dir_path);
   return fp;  
 }
@@ -135,7 +136,6 @@ filesys_remove (const char *pathname)
   if (strcmp (parent_dir_path, "/") && strcmp (filename, "/") == 0)
     {
       free (parent_dir_path);
-      free (filename);
       return false;
     }
   parent_dir = dir_pathname_lookup (parent_dir_path);
@@ -143,47 +143,11 @@ filesys_remove (const char *pathname)
       success = dir_remove (parent_dir, filename); 
   
   free (parent_dir_path);
-  free (filename);
   inode_close (file_inode);
   dir_close (parent_dir);
   return success;
 }
-
 
-bool
-filesys_mkdir (const char *dir)
-{
-  char *dirname;
-  char *parent_dir_path;
-  struct dir *parent_dir;
-  size_t parent_dir_sector;
-  size_t inode_sector = 0;
-
-  split_path (dir, &parent_dir_path, &dirname);
-  /* Using cwd. */
-  if (strcmp (parent_dir_path, "/") && strcmp (dirname, "/") == 0)
-    {
-      /* Cannot mkdir the root directory. */
-      free (parent_dir_path);
-      free (dirname);
-      return false;
-    }
-  parent_dir = dir_pathname_lookup (parent_dir_path);
-  parent_dir_sector = inode_get_inumber (dir_get_inode (parent_dir));
-
-  bool success = (parent_dir != NULL
-                  && free_map_allocate (1, &inode_sector)
-                  && dir_create (inode_sector, parent_dir_sector,
-                                 INITIAL_DIRENTS)
-                  && dir_add (parent_dir, dirname, inode_sector));
-  if (!success && inode_sector != 0) 
-    free_map_release (inode_sector);
-  
-  free (parent_dir_path);
-  free (dirname);
-  dir_close (parent_dir);
-  return success;
-}
 
 /* Formats the file system. */
 static void
@@ -215,7 +179,7 @@ split_path (const char *path, char **parent_dir_path, char **dirent)
       ASSERT (*dirent != NULL);
 
       strlcpy (*parent_dir_path, "/", 2);
-      strlcpy (*dirent, "/", 2);
+      *dirent = path;
     }
   /* Case 2: any path in format a/b/... or /a/b/... */
   else if ((last_slash = strrchr (path, '/')) != NULL)
@@ -226,12 +190,10 @@ split_path (const char *path, char **parent_dir_path, char **dirent)
     dirent_len = strlen (last_slash + 1);
     parent_dir_path_len = path_len - dirent_len;
 
-    *dirent = malloc (dirent_len + 1);
-    ASSERT (*dirent != NULL);
     *parent_dir_path = malloc (parent_dir_path_len + 1);
     ASSERT (*parent_dir_path != NULL);
 
-    strlcpy (*dirent, last_slash + 1, dirent_len + 1);
+    *dirent = last_slash + 1;
     strlcpy (*parent_dir_path, path, parent_dir_path_len + 1);
   }
   /* Case 3: relative path consisting of just the dirent */
@@ -240,10 +202,7 @@ split_path (const char *path, char **parent_dir_path, char **dirent)
     *parent_dir_path = malloc (2);
     ASSERT (*parent_dir_path != NULL);
 
-    *dirent = malloc (path_len + 1);
-    ASSERT (*dirent != NULL);
-
+    *dirent =  path;
     strlcpy (*parent_dir_path, ".", 2);
-    strlcpy (*dirent, path, path_len + 1);
   }
 }
