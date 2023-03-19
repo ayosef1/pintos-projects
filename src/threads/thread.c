@@ -625,7 +625,7 @@ init_thread (struct thread *t, const char *name, int priority)
   #endif
 
   #ifdef FILESYS
-    t->cwd = ROOT_DIR_SECTOR;
+    t->cwd = NULL;
   #endif
   /* Initialize the list of locks held by current list*/
   list_init (&t->locks_held);
@@ -674,7 +674,8 @@ init_child (struct thread *t)
       t->next_fd = EXEC_FD + 1;
 
       #ifdef FILESYS
-        t->cwd = thread_current ()->cwd;
+        struct dir *cur_cwd = thread_current ()->cwd;
+        t->cwd = cur_cwd == NULL ? NULL : dir_reopen (cur_cwd);
       #endif
     }
   return true;

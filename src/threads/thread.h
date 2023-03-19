@@ -196,7 +196,7 @@ struct thread
 #endif
 
 #ifdef FILESYS
-   block_sector_t cwd;
+   struct dir *cwd;                    /* Thread's current working directory. */
 #endif
 
     /* Owned by thread.c. */

@@ -186,8 +186,6 @@ process_exit (void)
     }
 
   /* Close all file descriptors. */
-  /* Close all file descriptors. */
-  struct fdt_entry *cur_entry;
   if (cur->fdtable)
     {
       struct fdt_entry *cur_entry;
@@ -206,6 +204,7 @@ process_exit (void)
         }
       free (cur->fdtable);
     }
+  dir_close (thread_current ()->cwd);
   
   /* Release all locks held by thread. */
   struct list_elem *e;

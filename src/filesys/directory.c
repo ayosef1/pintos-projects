@@ -299,7 +299,7 @@ dir_pathname_lookup (const char *pathname)
   struct dir *dir = NULL;
   
   /* Dealing with absolute path. */
-  if (pathname[0] == '/')
+  if (pathname[0] == '/' || thread_current ()->cwd == NULL)
     {
       while (*pathname == '/')
         pathname++;
@@ -307,7 +307,7 @@ dir_pathname_lookup (const char *pathname)
     }
   /* Dealing with relative path. */
   else
-    dir = dir_open (inode_open (thread_current ()->cwd));
+    dir = dir_reopen (thread_current ()->cwd);
 
   pathname_cpy = malloc (strlen (pathname) + 1);
   ASSERT (pathname != NULL);

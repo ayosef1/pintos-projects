@@ -390,8 +390,8 @@ sys_chdir (uint32_t *esp)
   if (dir == NULL)
     return false;
 
-  thread_current ()->cwd = inode_get_inumber (dir_get_inode (dir));
-  dir_close (dir);
+  dir_close (thread_current ()->cwd);
+  thread_current ()->cwd = dir;
   return true;
 }
 
