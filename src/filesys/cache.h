@@ -4,6 +4,7 @@
 #include "devices/block.h"
 #include "devices/timer.h"
 #include "filesys/off_t.h"
+#include "filesys/inode.h"
 #include "threads/synch.h"
 
 #define NO_READ_AHEAD -1
@@ -15,6 +16,14 @@ enum cache_use_type
         EXCL,                         /* Exclusive Access. */
         SHARE,                        /* Shared access. */
         R_AHEAD,                      /* Read ahead. */
+    };
+
+/* Information for read ahead thread to read in the next block. */
+struct r_ahead_data
+    {
+        block_sector_t inode_sector;        /* Inode sector. */
+        off_t ofs;                          /* Offest within Inode of
+                                               read ahead data. */
     };
 
 /* An entry in the buffer cache. */
@@ -46,7 +55,7 @@ void cache_init (void);
 struct cache_entry *cache_get_entry (block_sector_t sector,
                                      enum cache_use_type type,
                                      bool new,
-                                     block_sector_t read_ahead_sector);
+                                     struct r_ahead_data *r_ahead_data);
 void cache_release_entry (struct cache_entry *e, enum cache_use_type type,
                           bool dirty);
 void cache_write_to_disk (bool filesys_done);

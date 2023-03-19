@@ -340,13 +340,26 @@ struct cache_entry
         uint8_t *data;                  /* Actual cached sector. */
     };
 
-New data structure to represent entry in the read ahead queue
+New data structure to hold information necessary for read ahead thread to
+to read ahead and all necessary I/O associated with it instead of the process
+adding to the read ahead queue.
+
+    struct r_ahead_data
+        {
+            block_sector_t inode_sector;        /* Inode sector. */
+            off_t ofs;                          /* Offest within Inode of
+                                                read ahead data. */
+        };
+
+New data structure to represent entry in the read ahead queue:
 
     struct r_ahead_entry 
         {
-            block_sector_t sector;                  /* Sector to read ahead. */
+            struct r_ahead_data data;               /* Data to do read ahead. */
             struct list_elem list_elem;             /* Read ahead queue elem. */
         };
+
+
 
 Enumerated type to represent the different type of cache use. These enums
 are used as an argument to cache_get_entry and ensure that when the function
@@ -373,7 +386,7 @@ Static members of cache.c:
     static struct cache_entry *cache_end;
     /* Clock hand for eviction. */
     static struct cache_entry *clock_hand;
-    /* Count of number in use. */
+    /* Count of cache entries in use. */
     static int cached_count;
     /* Filesystem device for filesys R/W. */
     extern struct block *fs_device;

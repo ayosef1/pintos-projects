@@ -41,14 +41,14 @@ static void get_entry_sync (struct cache_entry *entry,
                             enum cache_use_type type,
                             bool write_back);
 static void tick_clock_hand (void);
-static void push_read_ahead_queue (block_sector_t);
+static void push_read_ahead_queue (struct r_ahead_data *r_ahead_data);
 static void read_ahead_fn (void *aux UNUSED);
 static void write_back_fn (void *aux UNUSED);
 
 /* Entry in read ahead queue. */
 struct r_ahead_entry 
     {
-        block_sector_t sector;                  /* Sector to read ahead. */
+        struct r_ahead_data data;               /* Data to do read ahead. */
         struct list_elem list_elem;             /* Read ahead queue elem. */
     };
 
@@ -82,7 +82,6 @@ cache_init (void)
     lock_init (&read_ahead_lock);
     cond_init (&read_ahead_cv);
 
-    /* Create the cleanup thread. */
     thread_create ("write_back", PRI_DEFAULT, write_back_fn, NULL);
     thread_create ("read_ahead", PRI_DEFAULT, read_ahead_fn, NULL);
 }
@@ -94,11 +93,11 @@ cache_init (void)
    If flag NEW is set, doesn't do initial search of cache to see if entry
    there.
 
-   Reads ahead if TYPE isn't READ AHEAD and block SECTOR wasn't already
-   cached. */
+   If R_AHEAD_DATA is non-null and the current sector is being read ahead
+   itself, adds the R_AHEAD_DATA to the read ahead queue. */
 struct cache_entry *
 cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new,
-                 block_sector_t read_ahead_sector)
+                 struct r_ahead_data *r_ahead_data)
 {
     /* Return a new entry. */
     bool present = false;
@@ -106,16 +105,16 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new,
     /* Seach cache if present. */
     if (!new)
         {
-                for (entry = cache_begin; entry < cache_end; entry++)
-                    {
-                        lock_acquire (&entry->lock);
-                        if (entry->allocated && entry->sector == sector)
-                            {
-                                present = true;
-                                break;
-                            }
-                        lock_release (&entry->lock);
-                    }
+            for (entry = cache_begin; entry < cache_end; entry++)
+                {
+                    lock_acquire (&entry->lock);
+                    if (entry->allocated && entry->sector == sector)
+                        {
+                            present = true;
+                            break;
+                        }
+                    lock_release (&entry->lock);
+                }
         }
     
     if (!present)
@@ -124,8 +123,8 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new,
     get_entry_sync (entry, type, false);
     
     /* Read ahead if it isn't present and not already reading ahead. */
-    if (!present && type != R_AHEAD)
-        push_read_ahead_queue (read_ahead_sector);
+    if (type != R_AHEAD && r_ahead_data != NULL)
+        push_read_ahead_queue (r_ahead_data);
     
     if (type != EXCL)
         lock_release (&entry->lock);
@@ -133,6 +132,11 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new,
     return entry;
 }
 
+/* Does the cleanup once a process has completed its use of cached block ENTRY
+   with type TYPE. Specifically, it signals updates the entry's metadata and
+   signals any waiting processes that can now access the cache entry.
+   
+   If the DIRTY flag is set, the cache entry is marked as dirty. */
 void
 cache_release_entry (struct cache_entry *entry, enum cache_use_type type,
                      bool dirty)
@@ -227,7 +231,6 @@ cache_add_sector (block_sector_t sector, bool new)
     bool can_allocate = cached_count < CACHE_SIZE;
     if (can_allocate)
         new_entry = cache_alloc ();
-    /* Evict an entry. */
     else
         new_entry = evict_cache_entry ();
     
@@ -295,7 +298,6 @@ evict_cache_entry (void)
                         }
                     else
                         {
-                            /* Write back to disk only when dirty. */
                             if (clock_hand->dirty)
                                 {
                                     block_write (fs_device, clock_hand->sector,
@@ -329,7 +331,10 @@ evict_cache_entry (void)
     If there are, waits to be signaled after the first process wanting
     exclusive access has completed.
 
-    Otherwise, no syncrhonization needed. */
+    Otherwise, no syncrhonization needed.
+    
+    If the WRITE_BACK flag is set, the accessed bit does not need
+    to be set. */
 static void
 get_entry_sync (struct cache_entry *entry, enum cache_use_type type,
                 bool write_back)
@@ -346,8 +351,6 @@ get_entry_sync (struct cache_entry *entry, enum cache_use_type type,
                         while (entry->shared_refs != 0);
                         entry->excl_waiters--;
                     }
-                if (!write_back)
-                    entry->accessed = true;
                 break;
             case (SHARE):
                 if (entry->excl_waiters != 0)
@@ -360,8 +363,11 @@ get_entry_sync (struct cache_entry *entry, enum cache_use_type type,
                 entry->accessed = true;
                 break;
             default:
-                break;
+                return;
         }
+    if (!write_back)
+        entry->accessed = true;
+    
 }
 
 /* Moves the clock hand forward once in the ring buffer. */
@@ -373,12 +379,12 @@ tick_clock_hand (void)
 }
 
 static void
-push_read_ahead_queue (block_sector_t sector)
+push_read_ahead_queue (struct r_ahead_data *r_ahead_data)
 {
     struct r_ahead_entry *e = malloc (sizeof (struct r_ahead_entry));
     if (e != NULL)
         {
-            e->sector = sector;
+            memcpy (&e->data, r_ahead_data, sizeof (struct r_ahead_data));
             lock_acquire (&read_ahead_lock);
             list_push_back (&read_ahead_queue, &e->list_elem);
             cond_signal (&read_ahead_cv, &read_ahead_lock);
@@ -386,8 +392,14 @@ push_read_ahead_queue (block_sector_t sector)
         }
 }
 
-/* Reads entry from the read ahead queue and reads entry into the buffer
-   cache. */
+/* Reads entry from the read ahead queue one at a time and reads entry into the
+   buffer cache. Specifically gets an inode and an offset and determines the 
+   data's corresponding block sector. It is guaranteed that this block is not
+   beyond the length of the inode for a write and not beyond the length of the 
+   file/directory if a read.
+
+   Reads entries one at a time to prevent starvation of threads trying to add
+   to the queue. Frees the entry after using. */
 static void
 read_ahead_fn (void *aux UNUSED)
 {
@@ -401,8 +413,12 @@ read_ahead_fn (void *aux UNUSED)
             lock_release (&read_ahead_lock);
             struct r_ahead_entry *entry = list_entry (e, struct r_ahead_entry,
                                                       list_elem);
-            if (free_map_present (entry->sector))
-                cache_get_entry (entry->sector, R_AHEAD, false, NO_READ_AHEAD);
+                                                      
+            block_sector_t sector = inode_get_sector (entry->data.inode_sector,
+                                                      entry->data.ofs, true);
+            if (sector != 0 && free_map_present (sector))
+                cache_get_entry (sector, R_AHEAD, false, NULL);
+
             free (entry);
         }
 }
