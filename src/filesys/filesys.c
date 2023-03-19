@@ -102,7 +102,6 @@ filesys_open (const char *pathname, struct fdt_entry *fdt_entry)
   struct inode *inode;
   bool success = false;
 
-  // get_last_token (pathname, &parent_dir_path, &filename);
   split_path (pathname, &parent_dir_path, &filename);
   parent_dir = dir_pathname_lookup (parent_dir_path);
 

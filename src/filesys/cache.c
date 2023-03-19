@@ -413,10 +413,12 @@ read_ahead_fn (void *aux UNUSED)
             lock_release (&read_ahead_lock);
             struct r_ahead_entry *entry = list_entry (e, struct r_ahead_entry,
                                                       list_elem);
+                                                      
             block_sector_t sector = inode_get_sector (entry->data.inode_sector,
                                                       entry->data.ofs, true);
             if (sector != 0 && free_map_present (sector))
                 cache_get_entry (sector, R_AHEAD, false, NULL);
+
             free (entry);
         }
 }
