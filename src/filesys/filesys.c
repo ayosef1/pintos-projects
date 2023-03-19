@@ -93,30 +93,47 @@ filesys_create (const char *pathname, off_t initial_size, bool is_file)
    otherwise.
    Fails if no file named NAME exists,
    or if an internal memory allocation fails. */
-struct file *
-filesys_open (const char *pathname)
+bool
+filesys_open (const char *pathname, struct fdt_entry *fdt_entry)
 {
   char *filename;
   char *parent_dir_path;
   struct dir *parent_dir;
-  struct inode *file_inode;
+  struct inode *inode;
+  bool success = false;
 
   // get_last_token (pathname, &parent_dir_path, &filename);
   split_path (pathname, &parent_dir_path, &filename);
   parent_dir = dir_pathname_lookup (parent_dir_path);
 
-  struct file *fp = NULL;
+  if (parent_dir == NULL)
+    goto open_done;
 
-  if (parent_dir != NULL)
+  if (strcmp (filename, "/") == 0)
     {
-      if (strcmp (filename, "/") == 0)
-        fp = file_open (inode_open (ROOT_DIR_SECTOR));
-      else if (dir_lookup (parent_dir, filename, &file_inode))
-        fp = file_open (file_inode);
+      fdt_entry->fp.dir = dir_open_root ();
+      fdt_entry->type = DIR;
+      success = true;
+      
     }
-  dir_close (parent_dir);
-  free (parent_dir_path);
-  return fp;  
+  else if (dir_lookup (parent_dir, filename, &inode) && inode != NULL)
+    {
+      if (inode_is_file (inode))
+        {
+          fdt_entry->fp.file = file_open (inode);
+          fdt_entry->type = FILE;
+        }
+      else
+        {
+          fdt_entry->fp.dir = dir_open (inode);
+          fdt_entry->type = DIR;
+        }
+      success = fdt_entry->fp.file != NULL;
+    }
+  open_done:
+    dir_close (parent_dir);
+    free (parent_dir_path);
+    return success;
 }
 
 /* Deletes the file named NAME.

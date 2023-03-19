@@ -205,7 +205,6 @@ sys_remove (uint32_t *esp)
 int
 sys_open (uint32_t *esp)
 {
-  int ret;
   char *fname;
   struct thread *cur;
 
@@ -216,21 +215,16 @@ sys_open (uint32_t *esp)
 
   cur = thread_current ();
   /* No available FDs. */
-  if (cur->next_fd < 0)
+  int fd = cur->next_fd;
+  if (fd < 0)
     return -1;
 
-  struct file *fp = filesys_open (fname);
-
-  /* File open unsuccessful or file limit hit */
-  if (fp == NULL)
+  if (!filesys_open (fname, cur->fdtable + fd))
     return -1;
-
-  ret = cur->next_fd;
-  cur->fdtable[ret] = fp;
   
   thread_update_next_fd (cur);
 
-  return ret;
+  return fd;
 
 }
 
@@ -244,14 +238,11 @@ sys_filesize (uint32_t *esp)
   if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
     exit (-1);
   
-  struct file *file = thread_current ()->fdtable[fd];
-	if (file == NULL)
-		exit (-1);
-  
-  if (file_get_dir (file) != NULL)
+  struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
+  if (!is_valid_file_fdt_entry (fdt_entry))
     exit (-1);
-
-	size = file_length (file);
+  
+	size = file_length (fdt_entry->fp.file);
   
   return size;
 }
@@ -282,16 +273,13 @@ sys_read (uint32_t *esp)
     }
   else
     {
-        struct thread *cur = thread_current ();
-        struct file *fp = cur->fdtable[fd];
+      struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
+      if (!is_valid_file_fdt_entry (fdt_entry))
+        return -1;
 
-        if (fp == NULL)
-          return -1;
-        
-        if (file_get_dir (fp) != NULL)
-          return -1;
+      bytes_read = file_read(fdt_entry->fp.file, buffer,
+                              size);
 
-        bytes_read = file_read (fp, buffer, size);
     }
   
   return bytes_read;
@@ -330,16 +318,11 @@ sys_write (uint32_t *esp)
     }
   else 
     {
-      struct thread *cur = thread_current ();
-      struct file *fp = cur->fdtable[fd];
-
-      if (fp == NULL) 
+      struct fdt_entry *fdt_entry =  thread_current ()->fdtable + fd;
+      if (!is_valid_file_fdt_entry (fdt_entry))
         return -1;
-
-      if (file_get_dir (fp) != NULL)
-        return -1;
-
-      bytes_written = file_write (fp, buffer, size);
+      bytes_written = file_write(fdt_entry->fp.file, buffer,
+                                 size);
     }
 
   return bytes_written;
@@ -356,13 +339,11 @@ sys_seek (uint32_t *esp)
   pos = get_arg_int (esp, 2);
   cur = thread_current ();
 
-  if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
+  struct fdt_entry *fdt_entry = cur->fdtable + fd;
+  if (!is_valid_fd(fd) || !is_valid_file_fdt_entry (fdt_entry))
     exit (-1);
   
-  if (file_get_dir (cur->fdtable[fd]) != NULL)
-    exit (-1);
-  
-  file_seek (cur->fdtable[fd], pos);
+  file_seek (fdt_entry->fp.file, pos);
 }
 
 static unsigned
@@ -374,13 +355,11 @@ sys_tell (uint32_t *esp)
   fd = get_arg_int (esp, 1);
   cur = thread_current ();
 
-  if (cur->fdtable[fd] == NULL)
-    exit (-1);
-  
-  if (file_get_dir (cur->fdtable[fd]) != NULL)
+  struct fdt_entry *fdt_entry = cur->fdtable + fd;
+  if (!is_valid_fd(fd) || !is_valid_file_fdt_entry (fdt_entry))
     exit (-1);
 
-  return file_tell (cur->fdtable[fd]);
+  return file_tell (fdt_entry->fp.file);
 }
 
 static void
@@ -438,23 +417,18 @@ sys_readdir (uint32_t *esp)
 {
   int fd;
   char *buffer;
-  struct file *fp;
-  struct dir *dir;
+  struct fdt_entry *fdt_entry;
 
   fd = get_arg_int (esp, 1);
   if (!is_valid_fd (fd))
     return false;
 
-  fp = thread_current ()->fdtable[fd];
-  if (fp == NULL)
-    return false;
-  
-  dir = file_get_dir (fp);
-  if (dir == NULL)
+  fdt_entry = thread_current ()->fdtable + fd;
+  if (fdt_entry->type != DIR || fdt_entry->fp.dir == NULL)
     return false;
   
   buffer = get_arg_buffer (esp, 2, NAME_MAX + 1);
-  bool result = dir_readdir (dir, buffer);
+  bool result = dir_readdir (fdt_entry->fp.dir, buffer);
   
   return result;
 }
@@ -463,35 +437,35 @@ static bool
 sys_isdir (uint32_t *esp)
 {
   int fd;
-  struct file *fp;
 
   fd = get_arg_int (esp, 1);
-  fp = thread_current ()->fdtable[fd];
 
-  /* TODO: Not sure if we are supposed to exit */
-  if (fp == NULL)
+  struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
+  if (fdt_entry->fp.file == NULL)
     exit (-1);
-  
-  return file_get_dir (fp) != NULL;
+
+  return fdt_entry->type == DIR;
 }
 
 static int
 sys_inumber (uint32_t *esp)
 {
   int fd;
-  struct file *fp;
   struct inode *inode;
 
   fd = get_arg_int (esp, 1);
-  fp = thread_current ()->fdtable[fd];
 
-  /* TODO: Not sure if we are supposed to exit */
-  if (fp == NULL)
-    exit (-1);
+  struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
+  if (fdt_entry->fp.file == NULL)
+    return false;
   
-  inode = file_get_inode (fp);
+  if (fdt_entry->type == DIR)
+    inode = dir_get_inode (fdt_entry->fp.dir);
+  else  
+    inode = file_get_inode (fdt_entry->fp.file);
+  
   if (inode == NULL)
-    exit (-1);
+    return false;
   
   return inode_get_inumber (inode);
 }

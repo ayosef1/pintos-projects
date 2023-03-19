@@ -16,6 +16,7 @@
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -185,13 +186,25 @@ process_exit (void)
     }
 
   /* Close all file descriptors. */
-  for (int fd = EXEC_FD; fd < MAX_FILES; fd++)
+  /* Close all file descriptors. */
+  struct fdt_entry *cur_entry;
+  if (cur->fdtable)
     {
-      if (cur->fdtable[fd] != NULL)
+      struct fdt_entry *cur_entry;
+      for (off_t fd = EXEC_FD; fd < MAX_FILES; fd++)
         {
-          file_close (cur->fdtable[fd]);
-          cur->fdtable[fd] = NULL;
+          cur_entry = cur->fdtable + fd;
+          if (cur_entry->fp.file != NULL)
+            {
+              if (cur_entry->type == DIR)
+                dir_close (cur_entry->fp.dir);
+              else
+                file_close (cur_entry->fp.file);
+              
+              cur_entry->fp.file = NULL;
+            }
         }
+      free (cur->fdtable);
     }
   
   /* Release all locks held by thread. */
@@ -330,13 +343,16 @@ load (struct process_arg *args, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (args->exec_name);
+  struct fdt_entry *exec_fdt_entry = thread_current ()->fdtable + EXEC_FD;
 
-  if (file == NULL) 
+  if (!filesys_open (args->exec_name, exec_fdt_entry)) 
     {
       printf ("load: %s: open failed\n", args->exec_name);
       goto done;
     }
+
+  ASSERT (exec_fdt_entry->type == FILE);
+  file = exec_fdt_entry->fp.file;
 
   file_deny_write (file);
   /* Read and verify executable header. */
@@ -422,7 +438,6 @@ load (struct process_arg *args, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */  
-  thread_current ()->fdtable[EXEC_FD] = file;
   return success;
 }
 

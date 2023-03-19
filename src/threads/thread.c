@@ -9,6 +9,7 @@
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
@@ -620,12 +621,6 @@ init_thread (struct thread *t, const char *name, int priority)
 
   #ifdef USERPROG
     t->exit_status = 0;
-    memset (t->fdtable, 0, sizeof (*t->fdtable));
-    /* Set fd = 0 to an invalid ptr */
-    t->fdtable[RESERVED_FD] = (void *)THREAD_MAGIC;
-    /* First two FDs reserved */
-    t->next_fd = EXEC_FD + 1;
-  
     list_init (&t->children);
   #endif
 
@@ -664,6 +659,19 @@ init_child (struct thread *t)
 
       list_push_back (&thread_current ()->children, &exit_info->child_elem);
       t->exit_info = exit_info;
+
+      void *fdtable = calloc (MAX_FILES, sizeof (struct fdt_entry));
+      if (fdtable == NULL)
+        {
+          palloc_free_page (exit_info);
+          return false;
+        }
+      
+      t->fdtable = fdtable;
+      /* Set fd = 0 to an invalid ptr */
+      t->fdtable[RESERVED_FD].type = RESERVED;
+      /* First two FDs reserved */
+      t->next_fd = EXEC_FD + 1;
 
       #ifdef FILESYS
         t->cwd = thread_current ()->cwd;
@@ -850,7 +858,7 @@ thread_update_next_fd (struct thread *t)
   int next_fd = EXEC_FD + 1;
   for (; next_fd < MAX_FILES; next_fd++) 
     {
-      if (t->fdtable[next_fd] == NULL)
+      if (t->fdtable[next_fd].fp.file == NULL)
       {
         t->next_fd = next_fd;
         return;
@@ -865,15 +873,17 @@ thread_update_next_fd (struct thread *t)
 void
 thread_close_fd (struct thread *t, int fd)
 {
-  struct file *fp = t->fdtable[fd];
-
+  struct fdt_entry *fdt_entry = t->fdtable + fd;
   /* Have previously closed the given file descriptor. */
-  if (fp == NULL)
+  if (fdt_entry->fp.file == NULL)
     return;
   
-  file_close (fp);
+  if (fdt_entry->type == FILE)
+    file_close (fdt_entry->fp.file);
+  else
+    dir_close (fdt_entry->fp.dir);
 
-  t->fdtable[fd] = NULL;
+  fdt_entry->fp.file = NULL;
 
   if (fd < t->next_fd)
     t->next_fd = fd;

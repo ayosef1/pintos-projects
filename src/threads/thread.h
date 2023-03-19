@@ -189,7 +189,7 @@ struct thread
    int exit_status;                    /* Exit status of thread. */
    struct list children;               /* List of children's exit 
                                           information. */
-   struct file *fdtable[MAX_FILES];    /* File Descriptor Table. */
+   struct fdt_entry *fdtable;          /* File Descriptor Table. */
    struct child_exit_info *exit_info;  /* Thread's exit information shared with
                                           parent. */
 #endif
