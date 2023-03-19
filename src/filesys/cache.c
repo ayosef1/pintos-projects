@@ -408,7 +408,8 @@ read_ahead_fn (void *aux UNUSED)
             if (free_map_present (entry->sector))
                 {
                     // printf ("Read ahead of sector %u", entry->sector);
-                    cache_get_entry (entry->sector, R_AHEAD, false, -1);
+                    cache_get_entry (entry->sector, R_AHEAD, false,
+                                     NO_READ_AHEAD);
                 }
             free (entry);
         }
