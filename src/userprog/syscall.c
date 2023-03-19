@@ -599,14 +599,21 @@ is_valid_path (char *path)
   if (path == NULL)
     return false;
   
-  int path_len = strlen (path) + 1;
-  path_cpy = malloc (path_len);
+  int path_len = strlen (path);
+  path_cpy = malloc (path_len + 1);
   ASSERT (path_cpy != NULL);
   path_cpy_free = path_cpy;
   
   strlcpy (path_cpy, path, path_len + 1);
   while (*path_cpy == '/')
     path_cpy++;
+
+  /* Reject paths that end in a '/' unless referring to root directory. */
+  if (*path_cpy != '\0' && path_cpy[strlen (path_cpy) - 1] == '/')
+    {
+      free (path_cpy_free);
+      return false;
+    }
 
   char *token = NULL;
   char *save_ptr = NULL;

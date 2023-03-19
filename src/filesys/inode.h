@@ -23,5 +23,7 @@ void inode_allow_write (struct inode *);
 off_t inode_length (const struct inode *);
 block_sector_t inode_get_sector (block_sector_t inode_sector, off_t offset,
                                  bool read);
+void inode_lock_dir (struct inode *inode);
+void inode_unlock_dir (struct inode *inode);
 
 #endif /* filesys/inode.h */

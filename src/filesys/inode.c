@@ -71,6 +71,8 @@ struct inode
     
     struct lock deny_write_lock;        /* Sync for deny_write_cnt. */
     struct lock extension_lock;         /* Sync for file extension. */
+    struct lock dir_lock;               /* Sync for operations on the same 
+                                           directory to wait for one another. */
   };
 
 /* Returns the logical index of the block that byte POS resides in
@@ -168,6 +170,7 @@ inode_open (block_sector_t sector)
   inode->removed = false;
   lock_init (&inode->deny_write_lock);
   lock_init (&inode->extension_lock);
+  lock_init (&inode->dir_lock);
   cond_init (&inode->no_writers);
 
   struct cache_entry *inode_entry = cache_get_entry (sector, SHARE, false,
@@ -432,6 +435,17 @@ inode_is_file (const struct inode *inode)
   return inode->is_file;
 }
 
+void
+inode_lock_dir (struct inode *inode)
+{
+  lock_acquire (&inode->dir_lock);
+}
+
+void
+inode_unlock_dir (struct inode *inode)
+{
+  lock_release (&inode->dir_lock);
+}
 /* Atomically checks inode INODE's length and acquires the extension lock
    if the write about to happen is longer than WRITE_END. */
 static bool

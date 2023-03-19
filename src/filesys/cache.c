@@ -48,7 +48,7 @@ static void write_back_fn (void *aux UNUSED);
 /* Entry in read ahead queue. */
 struct r_ahead_entry 
     {
-        struct r_ahead_data data;               /* Sector to read ahead. */
+        struct r_ahead_data data;               /* Data to do read ahead. */
         struct list_elem list_elem;             /* Read ahead queue elem. */
     };
 
