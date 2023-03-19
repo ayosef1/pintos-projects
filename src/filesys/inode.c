@@ -123,7 +123,7 @@ inode_create (block_sector_t sector, off_t length, bool is_file)
   struct inode_disk *disk_inode;
 
   ASSERT (length >= 0);
-  inode_entry = cache_get_entry (sector, EXCL, true);
+  inode_entry = cache_get_entry (sector, EXCL, true, -1);
   disk_inode = (struct inode_disk  *) inode_entry->data;
   disk_inode->length = length;
   disk_inode->magic = INODE_MAGIC;
@@ -272,8 +272,11 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
           memset(buffer + bytes_read, 0, chunk_size);
       else
         {
+          block_sector_t read_ahead_sector = get_data_sector (inode->sector,
+                                                              offset + BLOCK_SECTOR_SIZE,
+                                                              true);
           struct cache_entry *to_read = cache_get_entry (sector_idx, SHARE,
-                                                         false);
+                                                         false, read_ahead_sector);
           memcpy (buffer + bytes_read, to_read->data + sector_ofs, chunk_size);
           cache_release_entry (to_read, SHARE, false);
         }
@@ -334,8 +337,11 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
       
       /* Always a shared write because other extension lock acquired and
          other readers won't have access because length isn't updated. */
+      block_sector_t read_ahead_sector = get_data_sector (inode->sector,
+                                                          offset + BLOCK_SECTOR_SIZE,
+                                                          false);
       struct cache_entry *entry_to_write = cache_get_entry (sector_id, SHARE,
-                                                            false);
+                                                            false, read_ahead_sector);
       memcpy (entry_to_write->data + sector_ofs, buffer + bytes_written,
               chunk_size);
       cache_release_entry (entry_to_write, SHARE, true);
@@ -392,7 +398,7 @@ inode_length (const struct inode *inode)
 {
   off_t inode_length;
   struct cache_entry * cache_entry = cache_get_entry (inode->sector, SHARE,
-                                                      false);
+                                                      false, -1);
   struct inode_disk *data = (struct inode_disk *) cache_entry->data;
   inode_length = data->length;
   cache_release_entry (cache_entry, SHARE, false);
@@ -404,7 +410,7 @@ inode_is_file (const struct inode *inode)
 {
   bool is_file;
   struct cache_entry *cache_entry = cache_get_entry (inode->sector, SHARE,
-                                                     false);
+                                                     false, -1);
   struct inode_disk *data = (struct inode_disk *) cache_entry->data;
   is_file = data->is_file;
   cache_release_entry (cache_entry, SHARE, false);
@@ -418,7 +424,7 @@ inode_check_extension (struct inode *inode, off_t write_end)
 {
   bool extension = false;
   struct cache_entry * inode_entry = cache_get_entry (inode->sector, EXCL,
-                                                      false);
+                                                      false, -1);
   struct inode_disk *data = (struct inode_disk *) inode_entry->data;
   if (write_end > data->length)
     {
@@ -435,7 +441,7 @@ static void
 inode_update_length (struct inode *inode, off_t write_end)
 {
     struct cache_entry * inode_entry = cache_get_entry (inode->sector, EXCL,
-                                                        false);
+                                                        false, -1);
     struct inode_disk *data = (struct inode_disk *) inode_entry->data;
     data->length = write_end;
     cache_release_entry (inode_entry, EXCL, true);
@@ -527,7 +533,7 @@ allocate_new_blocks (block_sector_t *new_sectors, off_t *indicies,
   bool new = true;
   bool dirty = false;
 
-  struct cache_entry *data_entry = cache_get_entry (*new_sectors, EXCL, new);
+  struct cache_entry *data_entry = cache_get_entry (*new_sectors, EXCL, new, -1);
   cache_release_entry (data_entry, EXCL, dirty);
   parent_depth--;
   new_sectors++;
@@ -539,7 +545,7 @@ allocate_new_blocks (block_sector_t *new_sectors, off_t *indicies,
   while (parent_depth > stop_depth)
     {
       parent_sector = new_sectors;
-      parent_entry = cache_get_entry (*parent_sector, EXCL, new);
+      parent_entry = cache_get_entry (*parent_sector, EXCL, new, -1);
       set_block_ptr (parent_entry->data, indicies[parent_depth],
                      *child_sector, false);
       cache_release_entry (parent_entry, EXCL, dirty);
@@ -563,7 +569,7 @@ free_block (block_sector_t sector, off_t height)
   if (height > 0)
     {
       struct cache_entry *indirect_entry = cache_get_entry (sector, SHARE,
-                                                            false);
+                                                            false, -1);
       uint8_t *block = indirect_entry->data;
       height--;
       block_sector_t cur_sector;
@@ -586,7 +592,7 @@ free_inode_blocks (struct inode *inode)
      Little bit hacky because should be exclusive access but no one
      else can access this block when this call is made so OK. */
   struct cache_entry *inode_entry = cache_get_entry (inode->sector, SHARE,
-                                                     false);
+                                                     false, -1);
   struct inode_disk *inode_disk = (struct inode_disk *) inode_entry->data;
 
   off_t last_direct_idx = direct_idx (inode_disk->length);
@@ -635,7 +641,7 @@ get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
 
   int cur_depth = 0;
   block_sector_t cur_sector = inode_sector;
-  struct cache_entry *cur = cache_get_entry (cur_sector, SHARE, false);
+  struct cache_entry *cur = cache_get_entry (cur_sector, SHARE, false, -1);
 
   block_sector_t child_sector = get_block_ptr (cur->data, indicies[cur_depth],
                                                true);
@@ -644,7 +650,7 @@ get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
   /* Iterate through the indicies to get the data block number. */
   while (cur_depth < num_indicies - 1 && child_sector != 0)
     {
-      cur = cache_get_entry (child_sector, SHARE, false);
+      cur = cache_get_entry (child_sector, SHARE, false, -1);
       cur_sector = child_sector;
 
       cur_depth++;
@@ -674,7 +680,7 @@ get_data_sector (block_sector_t inode_sector, off_t offset, bool read)
       Exclusive lock needed because the block exists already. */
   bool cur_is_inode = cur_depth == 0;
 
-  cur = cache_get_entry (cur_sector, EXCL, false);
+  cur = cache_get_entry (cur_sector, EXCL, false, -1);
   set_block_ptr (cur->data, indicies[cur_depth],
                   new_sectors[num_to_create - 1],
                   cur_is_inode);

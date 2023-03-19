@@ -97,7 +97,8 @@ cache_init (void)
    Reads ahead if TYPE isn't READ AHEAD and block SECTOR wasn't already
    cached. */
 struct cache_entry *
-cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new)
+cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new,
+                 block_sector_t read_ahead_sector)
 {
     /* Return a new entry. */
     bool present = false;
@@ -124,7 +125,7 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new)
     
     /* Read ahead if it isn't present and not already reading ahead. */
     if (!present && type != R_AHEAD)
-        push_read_ahead_queue (sector + 1);
+        push_read_ahead_queue (read_ahead_sector);
     
     if (type != EXCL)
         lock_release (&entry->lock);
@@ -381,7 +382,7 @@ push_read_ahead_queue (block_sector_t sector)
     struct r_ahead_entry *e = malloc (sizeof (struct r_ahead_entry));
     if (e != NULL)
         {
-            e->sector = sector + 1;
+            e->sector = sector;
             lock_acquire (&read_ahead_lock);
             list_push_back (&read_ahead_queue, &e->list_elem);
             cond_signal (&read_ahead_cv, &read_ahead_lock);
@@ -407,7 +408,7 @@ read_ahead_fn (void *aux UNUSED)
             if (free_map_present (entry->sector))
                 {
                     // printf ("Read ahead of sector %u", entry->sector);
-                    cache_get_entry (entry->sector, R_AHEAD, false);
+                    cache_get_entry (entry->sector, R_AHEAD, false, -1);
                 }
             free (entry);
         }
