@@ -6,7 +6,9 @@
 #include "filesys/directory.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "filesys/inode.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
@@ -15,6 +17,8 @@
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 
+/*TODO: only here for INT_MAX since pathnames can be arbitrarily long. */
+#include <limits.h>
 static void syscall_handler (struct intr_frame *);
 
 static void sys_halt (void);
@@ -30,15 +34,23 @@ static int sys_write (uint32_t *esp);
 static void sys_seek (uint32_t *esp);
 static unsigned sys_tell (uint32_t *esp);
 static void sys_close (uint32_t *esp);
+static bool sys_chdir (uint32_t *esp);
+static bool sys_mkdir (uint32_t *esp);
+static bool sys_readdir (uint32_t *esp);
+static bool sys_isdir (uint32_t *esp);
+static int sys_inumber (uint32_t *esp);
 
 static void exit (int status);
 
+static char *get_arg_path (void *esp, int pos);
 static char *get_arg_string (void *esp, int pos, int limit);
 static void *get_arg_buffer (void *esp, int pos, int size);
 static int get_arg_int (void *esp, int pos);
 
 static bool is_valid_memory (void *buffer, unsigned size);
 static bool is_valid_address (void *uaddr);
+
+static bool is_valid_path (char *path);
 static bool is_valid_fd (int fd);
 
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
@@ -47,7 +59,6 @@ void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  lock_init (&filesys_lock);
 }
 
 static void
@@ -100,6 +111,21 @@ syscall_handler (struct intr_frame *f)
     case SYS_CLOSE:
       sys_close (f->esp);
       break;
+    case SYS_CHDIR:
+      f->eax = sys_chdir (f->esp);
+      break;
+    case SYS_MKDIR:
+      f->eax = sys_mkdir (f->esp);
+      break;
+    case SYS_READDIR:
+      f->eax = sys_readdir (f->esp);
+      break;
+    case SYS_ISDIR:
+      f->eax = sys_isdir (f->esp);
+      break;
+    case SYS_INUMBER:
+      f->eax = sys_inumber (f->esp);
+      break;
     default:
       exit (-1);
   }
@@ -151,33 +177,28 @@ sys_wait (uint32_t *esp)
 bool
 sys_create (uint32_t *esp)
 {
-  bool ret;
   char *fname;
   off_t initial_size;
-
-  fname = get_arg_string (esp, 1, NAME_MAX);
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return false;
 
   initial_size = get_arg_int (esp, 2);
-  lock_acquire (&filesys_lock);
-  ret = filesys_create (fname, initial_size);
-  lock_release (&filesys_lock);
-  return ret;
+  return filesys_create (fname, initial_size);
 }
 
 bool
 sys_remove (uint32_t *esp)
 {
-  bool ret;
   char *fname;
-  
-  fname = get_arg_string (esp, 1, NAME_MAX);
+
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return false;
 
-  ret = filesys_remove (fname);
-  return ret;
+  return filesys_remove (fname);
 }
 
 int
@@ -187,7 +208,8 @@ sys_open (uint32_t *esp)
   char *fname;
   struct thread *cur;
 
-  fname = get_arg_string (esp, 1, NAME_MAX);
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return -1;
 
@@ -196,9 +218,7 @@ sys_open (uint32_t *esp)
   if (cur->next_fd < 0)
     return -1;
 
-  lock_acquire (&filesys_lock);
   struct file *fp = filesys_open (fname);
-  lock_release (&filesys_lock);
 
   /* File open unsuccessful or file limit hit */
   if (fp == NULL)
@@ -220,7 +240,6 @@ sys_filesize (uint32_t *esp)
   int size;
   
   fd = get_arg_int (esp, 1);
-
   if (!is_valid_fd (fd) || fd == STDIN_FILENO || fd == STDOUT_FILENO)
     exit (-1);
   
@@ -228,9 +247,10 @@ sys_filesize (uint32_t *esp)
 	if (file == NULL)
 		exit (-1);
   
-  lock_acquire (&filesys_lock);
+  if (file_get_dir (file) != NULL)
+    exit (-1);
+
 	size = file_length (file);
-  lock_release (&filesys_lock);
   
   return size;
 }
@@ -238,7 +258,6 @@ sys_filesize (uint32_t *esp)
 int
 sys_read (uint32_t *esp)
 {
-
   int fd;
   uint8_t *buffer;
   unsigned size;
@@ -267,8 +286,11 @@ sys_read (uint32_t *esp)
 
         if (fp == NULL)
           return -1;
+        
+        if (file_get_dir (fp) != NULL)
+          return -1;
 
-        bytes_read = file_read(fp, buffer, size);
+        bytes_read = file_read (fp, buffer, size);
     }
   
   return bytes_read;
@@ -301,6 +323,7 @@ sys_write (uint32_t *esp)
           int to_write = remaining > BUF_MAX ? BUF_MAX : remaining;
           putbuf (buffer, to_write);
           remaining -= to_write;
+          buffer += to_write;
         }
       bytes_written = size;
     }
@@ -312,7 +335,10 @@ sys_write (uint32_t *esp)
       if (fp == NULL) 
         return -1;
 
-      bytes_written = file_write(fp, buffer, size);
+      if (file_get_dir (fp) != NULL)
+        return -1;
+
+      bytes_written = file_write (fp, buffer, size);
     }
 
   return bytes_written;
@@ -332,6 +358,9 @@ sys_seek (uint32_t *esp)
   if (!is_valid_fd(fd) || cur->fdtable[fd] == NULL)
     exit (-1);
   
+  if (file_get_dir (cur->fdtable[fd]) != NULL)
+    exit (-1);
+  
   file_seek (cur->fdtable[fd], pos);
 }
 
@@ -345,6 +374,9 @@ sys_tell (uint32_t *esp)
   cur = thread_current ();
 
   if (cur->fdtable[fd] == NULL)
+    exit (-1);
+  
+  if (file_get_dir (cur->fdtable[fd]) != NULL)
     exit (-1);
 
   return file_tell (cur->fdtable[fd]);
@@ -363,6 +395,104 @@ sys_close (uint32_t *esp)
   struct thread *cur = thread_current ();
   thread_close_fd (cur, fd);
   
+}
+
+  /* TODO: using INT_MAX since pathname shouldn't have a limit. */
+static bool
+sys_chdir (uint32_t *esp)
+{
+  char *dirpath;
+  struct dir *dir;
+
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  dirpath = get_arg_path (esp, 1);
+  if (dirpath == NULL)
+    return false;
+
+  dir = dir_pathname_lookup (dirpath);
+
+  if (dir == NULL)
+    return false;
+
+  thread_current ()->cwd = inode_get_inumber (dir_get_inode (dir));
+  dir_close (dir);
+  return true;
+}
+
+static bool
+sys_mkdir (uint32_t *esp)
+{
+  char *dir;
+
+  /*TODO: pathname can be much longer than NAME_MAX*/
+  dir = get_arg_path (esp, 1);
+  if (dir == NULL)
+    return false;
+
+  return filesys_mkdir (dir);
+}
+
+static bool
+sys_readdir (uint32_t *esp)
+{
+  int fd;
+  char *buffer;
+  struct file *fp;
+  struct dir *dir;
+
+  fd = get_arg_int (esp, 1);
+  if (!is_valid_fd (fd))
+    return false;
+
+  fp = thread_current ()->fdtable[fd];
+  if (fp == NULL)
+    return false;
+  
+  dir = file_get_dir (fp);
+  if (dir == NULL)
+    return false;
+  
+  buffer = get_arg_buffer (esp, 2, NAME_MAX + 1);
+  bool result = dir_readdir (dir, buffer);
+  
+  return result;
+}
+
+static bool
+sys_isdir (uint32_t *esp)
+{
+  int fd;
+  struct file *fp;
+
+  fd = get_arg_int (esp, 1);
+  fp = thread_current ()->fdtable[fd];
+
+  /* TODO: Not sure if we are supposed to exit */
+  if (fp == NULL)
+    exit (-1);
+  
+  return file_get_dir (fp) != NULL;
+}
+
+static int
+sys_inumber (uint32_t *esp)
+{
+  int fd;
+  struct file *fp;
+  struct inode *inode;
+
+  fd = get_arg_int (esp, 1);
+  fp = thread_current ()->fdtable[fd];
+
+  /* TODO: Not sure if we are supposed to exit */
+  if (fp == NULL)
+    exit (-1);
+  
+  inode = file_get_inode (fp);
+  if (inode == NULL)
+    exit (-1);
+  
+  return inode_get_inumber (inode);
 }
 
 /* Returns the int at position POS on stack pointed at
@@ -409,27 +539,49 @@ get_arg_string (void *esp, int pos, int limit)
 
   str_ptr = (char **)esp + pos;
 
-  /* Check the bytes of the char * are all in valid memory */
-  if (!is_valid_memory (str_ptr, sizeof (char *)) || !is_valid_address(*str_ptr))
+  /* Check the bytes of the char * are all in valid memory. */
+  if (!is_valid_memory (str_ptr, sizeof (char *))
+      || !is_valid_address(*str_ptr))
     exit (-1);
 
+  /* Empty string. */
+  if (**str_ptr == '\0')
+    return NULL;
+
   end = *str_ptr + limit + 1;
-  
-  for (cur = *str_ptr + 1; cur < end; cur++)
+  for (cur = *str_ptr; cur < end; cur++)
     {
       if (pg_ofs(cur) == 0 && !is_valid_address (cur))
         exit (-1);
       
       if (*cur == '\0')
         break;
-      
     }
   
-  /* Either empty string of greater than LIMIT */
-  if (cur == *str_ptr || cur == end)
+  /* String of longer than LIMIT */
+  if (cur == end)
     return NULL;
   
   return *str_ptr;
+}
+
+/* Returns path string at position POS on stack pointed at by ESP.
+   Paths can be arbitrarily long so it first extracts the path then
+   returns path if valid. Path is invalid if any of the string bytes 
+   are in invalid memory or any file names in the path are longer than
+   NAME_MAX. In the former case, calling thread is terminated and in the
+   latter NULL is returned. */
+static char *
+get_arg_path (void *esp, int pos)
+{
+  char *path;
+
+  path = get_arg_string (esp, pos, INT_MAX);
+  /* Check that each file in the path has a name less than NAME_MAX. */
+  if (!is_valid_path (path))
+    return NULL;
+  
+  return path;
 }
 
 /* Returns whether bytes starting at START are in valid user space */
@@ -460,6 +612,43 @@ is_valid_address (void *vaddr)
                        && pagedir_get_page (thread_current ()->pagedir, vaddr);
 }
 
+/* Checks that every file in a path has a name
+   that does not exceed NAME_MAX characters. */
+static bool
+is_valid_path (char *path)
+{
+  bool valid = true;
+  char *path_cpy;
+  char *path_cpy_free;
+
+  if (path == NULL)
+    return false;
+  
+  int path_len = strlen (path) + 1;
+  path_cpy = malloc (path_len);
+  ASSERT (path_cpy != NULL);
+  path_cpy_free = path_cpy;
+  
+  strlcpy (path_cpy, path, path_len + 1);
+  while (*path_cpy == '/')
+    path_cpy++;
+
+  char *token = NULL;
+  char *save_ptr = NULL;
+  for (token = strtok_r (path_cpy, "/", &save_ptr);
+       token != NULL && *token != '\0';
+       token = strtok_r (NULL, "/", &save_ptr))
+    {
+      if (strlen (token) > NAME_MAX)
+        {
+          valid = false;
+          break;
+        }
+    }
+
+  free (path_cpy_free);
+  return valid;
+}
 /* Returns whether FD is between 0 and MAX_FILES */
 static bool
 is_valid_fd (int fd) 

@@ -6,6 +6,11 @@
 #include "threads/malloc.h"
 #include "threads/thread.h"
 
+#define CACHE_SIZE 64                       /* Size of buffer cache. */                             
+#define MAX_CLOCK_LOOPS 2                   /* Max number of iterations 
+                                               when in eviction. */     
+#define WRITE_BACK_PERIOD TIMER_FREQ * 30   /* Flush cache back to disk
+                                               every 30 seconds. */
 
 /* Synchronization when loading block sector into cache for race between
    two processes that both can't find block sector in cache. Prevents double
@@ -34,7 +39,7 @@ static struct cache_entry *cache_alloc (void);
 static struct cache_entry *evict_cache_entry (void);
 static void get_entry_sync (struct cache_entry *entry,
                             enum cache_use_type type,
-                            bool evict);
+                            bool write_back);
 static void tick_clock_hand (void);
 static void push_read_ahead_queue (block_sector_t);
 static void read_ahead_fn (void *aux UNUSED);
