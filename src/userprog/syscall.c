@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <syscall-nr.h>
@@ -17,8 +18,6 @@
 #include "userprog/process.h"
 #include "userprog/syscall.h"
 
-/*TODO: only here for INT_MAX since pathnames can be arbitrarily long. */
-#include <limits.h>
 static void syscall_handler (struct intr_frame *);
 
 static void sys_halt (void);
@@ -52,7 +51,7 @@ static bool is_valid_address (void *uaddr);
 
 static bool is_valid_path (char *path);
 static bool is_valid_fd (int fd);
-static bool is_valid_file_fdt_entry (struct fdt_entry *fdt_entry);
+static bool is_valid_file (struct fdt_entry *fdt_entry);
 
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
 
@@ -180,7 +179,7 @@ sys_create (uint32_t *esp)
 {
   char *fname;
   off_t initial_size;
-  /*TODO: pathname can be much longer than NAME_MAX*/
+
   fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return false;
@@ -194,7 +193,6 @@ sys_remove (uint32_t *esp)
 {
   char *fname;
 
-  /*TODO: pathname can be much longer than NAME_MAX*/
   fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return false;
@@ -208,12 +206,12 @@ sys_open (uint32_t *esp)
   char *fname;
   struct thread *cur;
 
-  /*TODO: pathname can be much longer than NAME_MAX*/
   fname = get_arg_path (esp, 1);
   if (fname == NULL)
     return -1;
 
   cur = thread_current ();
+  
   /* No available FDs. */
   int fd = cur->next_fd;
   if (fd < 0)
@@ -239,7 +237,7 @@ sys_filesize (uint32_t *esp)
     exit (-1);
   
   struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
-  if (!is_valid_file_fdt_entry (fdt_entry))
+  if (!is_valid_file (fdt_entry))
     exit (-1);
   
 	size = file_length (fdt_entry->fp.file);
@@ -274,7 +272,7 @@ sys_read (uint32_t *esp)
   else
     {
       struct fdt_entry *fdt_entry = thread_current ()->fdtable + fd;
-      if (!is_valid_file_fdt_entry (fdt_entry))
+      if (!is_valid_file (fdt_entry))
         return -1;
 
       bytes_read = file_read(fdt_entry->fp.file, buffer,
@@ -319,7 +317,7 @@ sys_write (uint32_t *esp)
   else 
     {
       struct fdt_entry *fdt_entry =  thread_current ()->fdtable + fd;
-      if (!is_valid_file_fdt_entry (fdt_entry))
+      if (!is_valid_file (fdt_entry))
         return -1;
       bytes_written = file_write(fdt_entry->fp.file, buffer,
                                  size);
@@ -340,7 +338,7 @@ sys_seek (uint32_t *esp)
   cur = thread_current ();
 
   struct fdt_entry *fdt_entry = cur->fdtable + fd;
-  if (!is_valid_fd(fd) || !is_valid_file_fdt_entry (fdt_entry))
+  if (!is_valid_fd(fd) || !is_valid_file (fdt_entry))
     exit (-1);
   
   file_seek (fdt_entry->fp.file, pos);
@@ -356,7 +354,7 @@ sys_tell (uint32_t *esp)
   cur = thread_current ();
 
   struct fdt_entry *fdt_entry = cur->fdtable + fd;
-  if (!is_valid_fd(fd) || !is_valid_file_fdt_entry (fdt_entry))
+  if (!is_valid_fd(fd) || !is_valid_file (fdt_entry))
     exit (-1);
 
   return file_tell (fdt_entry->fp.file);
@@ -377,14 +375,12 @@ sys_close (uint32_t *esp)
   
 }
 
-  /* TODO: using INT_MAX since pathname shouldn't have a limit. */
 static bool
 sys_chdir (uint32_t *esp)
 {
   char *dirpath;
   struct dir *dir;
 
-  /*TODO: pathname can be much longer than NAME_MAX*/
   dirpath = get_arg_path (esp, 1);
   if (dirpath == NULL)
     return false;
@@ -404,7 +400,6 @@ sys_mkdir (uint32_t *esp)
 {
   char *dir;
 
-  /*TODO: pathname can be much longer than NAME_MAX*/
   dir = get_arg_path (esp, 1);
   if (dir == NULL)
     return false;
@@ -641,7 +636,7 @@ is_valid_fd (int fd)
 /* Checks whether the file descriptor table entry FDT_ENTRY is a file
    and points to a valid file. */
 static bool
-is_valid_file_fdt_entry (struct fdt_entry *fdt_entry)
+is_valid_file (struct fdt_entry *fdt_entry)
 {
     return fdt_entry->fp.file != NULL && fdt_entry->type == FILE;
 }

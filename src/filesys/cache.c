@@ -290,7 +290,6 @@ evict_cache_entry (void)
                        starvation of threads waiting on this entry. */
                     if (clock_hand->accessed)
                         {
-                            // printf ("Sector %u was accesed\n", clock_hand->sector);
                             clock_hand->accessed = false;
                             cache_release_entry (clock_hand, EXCL, false);
                         }
@@ -310,10 +309,7 @@ evict_cache_entry (void)
                         }
                 }
             else
-                {
-                    // printf ("In eviction sector %u was not allocated\n", clock_hand->sector);
-                    lock_release (&clock_hand->lock);
-                }
+                lock_release (&clock_hand->lock);
 
             tick_clock_hand ();
             if (clock_hand == clock_start)
@@ -406,11 +402,7 @@ read_ahead_fn (void *aux UNUSED)
             struct r_ahead_entry *entry = list_entry (e, struct r_ahead_entry,
                                                       list_elem);
             if (free_map_present (entry->sector))
-                {
-                    // printf ("Read ahead of sector %u", entry->sector);
-                    cache_get_entry (entry->sector, R_AHEAD, false,
-                                     NO_READ_AHEAD);
-                }
+                cache_get_entry (entry->sector, R_AHEAD, false, NO_READ_AHEAD);
             free (entry);
         }
 }
