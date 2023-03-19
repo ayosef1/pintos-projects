@@ -94,11 +94,15 @@ Changes to inode.c:
     Added members `struct inode` to:
 
         int write_cnt;                      /* Number of writers. */
-        struct condition no_writers;        /* Condition variable to 
-                                               appropriately set 
-                                               deny_write_cnt. */
         
-        struct lock lock;                   /* Sync for file extension. */
+        struct condition no_writers;        /* Condition variable to set
+                                               deny_write_cnt when no more
+                                               users. */
+    
+        struct lock deny_write_lock;        /* Sync for deny_write_cnt. */
+        struct lock extension_lock;         /* Sync for inode extension. Makes
+                                               extension of inode and updating
+                                               inode length atomic. */
 ------------------------------------------------------------------------------
 Changes to cache.h:
 
@@ -108,11 +112,21 @@ Changes to cache.h:
         enum cache_use_type
             {
                 EXCL,                         /* Exclusive access. */
-                SHARE,                        /* Non exclusive write. */
-                SHARE,                        /* Read of data. */
-                R_AHEAD,                        /* Read ahead. */
-                NEW                             /* Use type. */
+                SHARE,                        /* Shared exclusive access. */
+                R_AHEAD,                      /* Read ahead. */
             };
+    
+    Added members to `struct cache`
+        int shared_waiters;             /* Number of processes waiting for
+                                           shared access. */
+        int excl_waiters;               /* Number processes waiting for
+                                           exclusive access. */
+        struct condition excl_done;     /* Signal shared waiterss who attempted
+                                           to access cache after an attempt
+                                           to gain exclusive access.. */
+
+    
+
 ------------------------------------------------------------------------------
 Changes to free_map.c
 
@@ -145,17 +159,18 @@ This comes out to:
 >> extend a file at the same time.
 
 Interleaved writing and reading when not extending a file is achieved with
-the use of the `SHARE` and `SHARE` type accesses. These two accesses
-release the lock on the relevant cached block in the buffer cache once they
-have updated the relevant metadata, meaning that mutiple processes can read
-and write to a block in a file if before the EOF.
+the use of the `SHARE` type accesses. These two accesses release the lock on
+the relevant cached block in the buffer cache once they have updated the 
+relevant metadata, meaning that mutiple processes can read and write to a block
+in a file if doing so before the EOF.
 
 Writing in the `inode_write_at` funciton is done in block increments, where
 you write a block at a time. Before accessing getting the relevant sector number
-of the block to write to, a process checks what the length of the file is on
-the inode. It does so using the `EXCL` flag, meaning that it waits for all 
-other processes to stop using the cached inode and then acquires the lock to the
-cache entry (i.e. exclusive access to the `length` field). If it sees that
+of the block to write to, a synchronously checks what the length of the file is 
+by using the `EXCL` enum when acquiring the lock. This flag ensures that 
+upon return the process has exclusive access to the cached inode block and 
+therefore the store of the current length of the data the inode represents
+The `EXCL`flag is described in detail in Section C. If the process sees that
 the current write would extend the file it acquires the extension lock.
 
 The `extension_lock` synchronizes these actions for processes extending a file:
@@ -164,7 +179,9 @@ The `extension_lock` synchronizes these actions for processes extending a file:
     3) Updating the length field in the inode. 
 
 Moreover there are no race conditions between two processes trying to extend
-a file at the same time.
+a file at the same time. Note that writing is done in block increments and so
+the extension lock not held for the entire duration of a write, but for each
+individual block write.
 
 >> A4: Suppose processes A and B both have file F open, both
 >> positioned at end-of-file.  If A reads and B writes F at the same
@@ -185,8 +202,8 @@ extends the file.
 Specifically, it uses the `EXCL` flag when it accesses to update the length.
 This flag ensures uses the condition variable `no_refs` to wait there are no
 users of the cached inode sector, gains exclusive control and then updates the
-length.  The flag also marks the page as dirty so it is written back to disk
-by the write back funciton.
+length. A second flag passed to the buffer cache once finished, to marks the
+page as dirty so it is written back to disk by the write back funciton.
 
 Correspondingly, a process is only able to read up until EOF, which is
 represented by the `length` of the inode. This means that Process A has to wait
@@ -200,28 +217,25 @@ read what B has written beyond the EOF before B's write.
 >> processes writing to a file cannot prevent another process forever
 >> from reading the file.
 
-One way to ensure fairness is by making sure that reading and writing is done
-on a block by block basis. This means that a large read or write will not
-starve other processes as it will release the lock and be added to the back of
-the waiters queue for those attempting to access the block (the granularity
-of locking).
+Starvation is avoided by the use of the `shared_waiters`, `excl_waiters`,
+`no_refs`, `shared_refs` and `excl_done` members of each cache entry. After
+acquiring the lock on a buffer cache, processes check if there are any waiters
+of a different kind on the cached block. For example when process A wants
+EXCL access, it first checks if there are any `shared_waiters`. If there are
+A goes to sleep on the condition variable `no_refs` and waits to be signalled
+by the process of those shared waiters that decrements `shared_refs` to 0.
+Similarly, those gaining shared access check to see whether there are any
+`excl_waiters` and if so goes to sleep on the `excl_done` condition variable.
 
-Our use of shared lock also creates fairness as most writes and reads can be
-interleaved and don't require exclusive access to a block. The only case where
-starvation could occur is when an exclusive lock (with the `EXCL` flag) is
-begin acquired. This flag is acquired when updating metadata on a block, either
-a block pointer on a block or updating and inode. To prevent starvation
+Once and exclusive process finishes with its access, it broadcasts to the
+`excl_waiters` condition variable to wake up any processes attempted to gain
+shared access. Similarly, the shared process to last stop using a cached_block
+signals the `no_refs` condition variable to wake up the next process attempting
+to gain exclusive access.
 
-In attempting to acquire this lock, the process attempting to
-write waits on the condition variable `no_refs`. Starvation could occur in this
-scenario since processes could conitnue to 
-
-
-Our fariness also takes advantage of the priority and round robin fairness that
-already exists within the pintos synrchronization. Specfically threads trying
-to access a resource are ordered by priority and then by arrival time. This
-means that neither reads nor writes are specifically prioritised when waiting
-on a lock.
+This queuing mechanism ensures fairness by making sure that processes that
+are made to wait / sleep and put in a queued order. Each single exclusive access
+is interleaved with every shared access that comes after it gains the lock.
 
 ---- RATIONALE ----
 
@@ -299,18 +313,15 @@ Added new data structure to represent cache entries.
 struct cache_entry
     {
         block_sector_t sector;          /* Block sector represented. */
-        int write_refs;                 /* Total number of writer references. */
-        int total_refs;                 /* Total number of references. */
+        int shared_refs;                /* Number of shared references. */
         bool accessed;                  /* Accessed bit for eviction. */
         bool dirty;                     /* Dirty bit for eviction and write
                                            back. */
         bool allocated;                 /* Whether cache_entry has been 
                                            allocated. */
-        struct condition no_writers;    /* For write back, signal when 
-                                           write_refs decremented to zero. */
-        struct condition no_refs;       /* For eviction, when on*/
         struct lock lock;               /* Lock to synchronize access to cache
-                                           entry metadata. */  
+                                           entry metadata. */
+        struct condition no_refs;       /* For eviction, when on. */
         uint8_t *data;                  /* Actual cached sector. */
     };
 
@@ -320,6 +331,17 @@ New data structure to represent entry in the read ahead queue
         {
             block_sector_t sector;                  /* Sector to read ahead. */
             struct list_elem list_elem;             /* Read ahead queue elem. */
+        };
+
+Enumerated type to represent the different type of cache use. These enums
+are used as an argument to cache_get_entry and ensure that when the function
+returns the cache_entry has had the appropriate synchronization applied.
+
+    enum cache_use_type
+        {
+            EXCL,                         /* Exclusive access. */
+            SHARE,                        /* Shared exclusive access. */
+            R_AHEAD,                      /* Read ahead. */
         };
 
 Static members of cache.c:
@@ -364,13 +386,13 @@ entries are considered for eviction. Similarly the `total_refs` member tracks
 whether the cache block is being used. If `total_refs` is greater than 0, an
 entry is not considered for eviction.
 
-The clock hand is initialized (at boot) to point to the first
-entry in the buffer cache. During eviction, the algorithm acquires the lock
-for the entry that the clock hand is pointing to. If the entry is not allocated
-the lock on the entry is released and the clock hand proceeds. 
-Next the eviction algorithm waits on the total_refs of the cache entry to go
-to zero using a condition variable. This is to ensure fairness of the clock
-algorithm (i.e. no pinning as before).
+The clock hand is initialized (at boot) to point to the first entry in the
+buffer cache. During eviction, the algorithm acquires the lock for the entry 
+that the clock hand is pointing to. If the entry is not allocated the lock on 
+the entry is released and the clock hand proceeds. Next the eviction algorithm
+waits on the total_refs of the cache entry to go to zero using a condition 
+variable. This is to ensure fairness of the clock algorithm (i.e. no pinning 
+as with VM).
 
 Next the accessed flag is checked. If it is set, it is set to 0 and the clock 
 hand procceeds (once the lock is dropped). Otherwise that cache entry is chosen
@@ -391,13 +413,13 @@ when the cached block sector is written to and initialized to false. The thread
 is given default priority (31).
 
 To write behind, the `write-back` thread iterates across the buffer cache.
-For each allocated entry it acquires the entries' lock and waits on the 
-condition variable `no_waiters` to ensure that no threads are currently writing
-to the entry. Once no more threads are writing to cached block sector, it gains
-exclusive access, writes the cached block back to disk if it is dirty and then
-moves on to the next cache entry (after dropping the current one's lock).
-Once it has iterated across the whole buffer cache it goes back to sleep for 10
-seconds.
+For each entry it acquires the entry using the `EXCL` flag. This means once 
+the thread acquires the lock on the entry it waits on the condition variable 
+`no_refs` to ensure that no threads are currently writing to the entry. Once no
+more threads are writing to cached block sector, it gains exclusive access, 
+writes the cached block back to disk if it is dirty and then moves on to the 
+next cache entry (after dropping the current one's lock). Once it has iterated 
+across the whole buffer cache it goes back to sleep for 10 seconds.
 
 On shutdown, the main thread writes back each allocated cache entry and frees
 all associated memory with each entry. After iterating through the list is also
@@ -421,7 +443,8 @@ the condition variable if there are no entries in the queue.
 
 Note to ensure fairness the read ahead thread is given default priority (31) 
 and it only reasons one entry at a time to prevent starvation of processes
-trying to add to the queue.
+trying to add to the queue. Additionally, the read ahead queue checks the free
+map to ensure the block sector is actually allocated before reading it in.
 
 
 ---- SYNCHRONIZATION ----
@@ -433,33 +456,43 @@ trying to add to the queue.
 Each cache entry has a lock that protects its metadata. Before a process
 accesses a cache entry, it first has to acquire the lock on that cache_entry.
 When process A reads or writes to a buffer cache block, it first acquires the
-cache entry lock and increments `total_refs`. It then releases the lock and
-begins reading / writing to the cached block. Once it has completed reading 
-/ writing, it acquires the lock again and decrements `total_refs`. This means
-whenever a process is actively reading / writing data in a buffer cache block
-that the `total_refs` is non-zero.
+cache entry lock and increments `shared_refs` (assuming it is not extending).
+It then releases the lock and begins reading / writing to the cached block.
+Once it has completed reading / writing, it acquires the lock again and 
+decrements `shared_refs`. This means whenever a process is actively 
+reading / writing data in a buffer cache block that the `shared_refs`is
+non-zero. There is also the case when a process has exclusive access to a block,
+in this case it simply holds the lock for the duration of its access.
 
 Correspondingly, during eviction, when process B is deciding whether to evict
-a block from the cache it first acquires the cache lock and inspects its
-`total_refs` member. If this member is non-zero, it blocks on the condition
-variable `no_refs` until `total_refs` is zero. The process that decrements
-`total_refs` to zero signals the process B when finished writing / reading. 
-This means that blocks that are being actively written to or read from i.e. 
-`total_refs` is non zero, are never evicted.
+a block from the cache it does so using the `EXCL` enum. This is the same
+synchronization mechanism used by the write behind thread. B first acquires the
+cache lock. From this point on, a processes that tries to gain access to the 
+cache entry will have to wait until B is done. Next B inspects `share_refs` 
+member to check whether any processes are currently accessing the block. If 
+this member is  non-zero, it blocks on the condition variable `no_refs`. The 
+process that  decrements `shared_refs` to zero signals the process B when 
+finished writing / reading. This means that blocks that are being actively 
+written to or read from i.e. `shared_refs` is non zero, are never evicted. The 
+evicting process is not starved via the mechanism described in A5.
 
 >> C6: During the eviction of a block from the cache, how are other
 >> processes prevented from attempting to access the block?
 
-Similarly to above, when performing the eviction selection algorithm, the
-process acquires the lock on the cache entry to determine whether to select
-a given cache entry. If selected, the lock is still held and it is guaranteed
-that no other block is accessing the block (since `total_refs` must be 0 to
-be selected). This lock is only released once eviction is completed. Since a 
-process must acquire the cache entry' lock in order to access the block, if
-another process attempt to access the block during up until the moment that
-the eventually evicted block is selected to determine whether eligible for
-eviction it must wait until eviction is complete (when the entry's lock is
-released).
+Similar to above, when performing the eviction selection algorithm, the
+process acquires exclusive access to the cache entry by using the `EXCL`
+`enum cache_use_type` in the call to `cache_get_entry`. This flag ensures that
+no other processes are currently using the cached block. This is achieved by
+the mechanism described above of acquring the lock, meaning no other processes
+have exclusive access and then waiting on the condition variable until all 
+current users are finished using it. If selected, the lock is still held and it 
+is guaranteed that no other block is still accessing the block (since 
+`shared_refs` must be 0 to wake up from the condition variable `no_refs`. 
+This lock is only released once  eviction is completed. Since a process must 
+acquire the cache entry' lock in order to access the block, if another process 
+attempt to access the block during up until the moment that the eventually 
+evicted block is selected to determine whether eligible for eviction it must 
+wait until eviction is complete (when the entry's lock is released).
 
 ---- RATIONALE ----
 
