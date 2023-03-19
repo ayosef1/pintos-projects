@@ -45,10 +45,13 @@ filesys_done (void)
   cache_write_to_disk (true);
 }
 
-/* Creates a file named NAME with the given INITIAL_SIZE.
+/* If the IS_FILE flag is set creates a file with path PATHNAME and
+   size INTIAL_SIZE.
+   Otherwise creates a directory with path PATHNAME.
+
    Returns true if successful, false otherwise.
-   Fails if a file named NAME already exists,
-   or if internal memory allocation fails. */
+   Fails if a entry named NAME already exists in parent directory, invalid
+   path or if internal memory allocation fails. */
 bool
 filesys_create (const char *pathname, off_t initial_size, bool is_file) 
 {
@@ -88,11 +91,11 @@ filesys_create (const char *pathname, off_t initial_size, bool is_file)
     return success;
 }
 
-/* Opens the file with the given NAME.
-   Returns the new file if successful or a null pointer
-   otherwise.
-   Fails if no file named NAME exists,
-   or if an internal memory allocation fails. */
+/* Opens the file or directory with the given PATHNAME.
+   Stores the relevant file /directory pointer and fdt_entry type in
+   FDT_ENTRY.
+   Returns true if file / dir was successfully opened.
+   Fails if invalid path, or if an internal memory allocation fails. */
 bool
 filesys_open (const char *pathname, struct fdt_entry *fdt_entry)
 {
@@ -135,9 +138,9 @@ filesys_open (const char *pathname, struct fdt_entry *fdt_entry)
     return success;
 }
 
-/* Deletes the file named NAME.
+/* Deletes the file / directory named PATHNAME.
    Returns true if successful, false on failure.
-   Fails if no file named NAME exists,
+   Fails if PATHNAME invalid, PATHNAME is a non-empty directory
    or if an internal memory allocation fails. */
 bool
 filesys_remove (const char *pathname) 

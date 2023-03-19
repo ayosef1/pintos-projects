@@ -378,6 +378,8 @@ tick_clock_hand (void)
         clock_hand = cache_begin;
 }
 
+/* Pushes the information to perform read ahead from R_AHEAD_DATA onto the
+   read ahead queue. */
 static void
 push_read_ahead_queue (struct r_ahead_data *r_ahead_data)
 {

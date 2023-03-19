@@ -22,8 +22,9 @@ struct dir_entry
     bool in_use;                        /* In use or free? */
   };
 
-/* Creates a directory with space for ENTRY_CNT entries in the
-   given SECTOR.  Returns true if successful, false on failure. */
+/* Creates a directory with its '.' directory mapped to SECTOR and its
+   '..' directory mapped to PARENT_SECTOR.
+   Returns true if successful, false on failure. */
 bool
 dir_create (block_sector_t sector, block_sector_t parent_sector)
 {
@@ -198,6 +199,8 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
   return success;
 }
 
+/* Returns the number of directory entries in directory DIR excluding the
+   home and parent directory. */
 static size_t
 get_num_dirents (struct dir *dir)
 {
@@ -217,7 +220,9 @@ get_num_dirents (struct dir *dir)
 
 /* Removes any entry for NAME in DIR.
    Returns true if successful, false on failure,
-   which occurs only if there is no file with the given NAME. */
+   Failure only occurs on a file if there is no file with the given NAME.
+   Failure occurs on a dir if the directory isn't empty, the directory NAME 
+   is not empty or is currently open by another process. */
 bool
 dir_remove (struct dir *dir, const char *name) 
 {
@@ -243,7 +248,6 @@ dir_remove (struct dir *dir, const char *name)
      or directories currently open in process. */
   if (!inode_is_file (inode) && 
       (get_num_dirents (dir_open (inode)) != 0 ||
-       thread_current ()->cwd == inode_get_inumber (inode) ||
        inode_get_open_cnt (inode) > 1))
     goto done;
 

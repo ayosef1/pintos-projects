@@ -13,6 +13,7 @@
 
 /* Directories start off with two entries: '.' and '..' */
 #define NUM_INITIAL_DIRENTS 2
+
 struct inode;
 
 /* Opening and closing directories. */
