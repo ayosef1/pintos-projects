@@ -185,7 +185,7 @@ sys_create (uint32_t *esp)
     return false;
 
   initial_size = get_arg_int (esp, 2);
-  return filesys_create (fname, initial_size, true);
+  return filesys_create (fname, initial_size, IS_FILE);
 }
 
 bool
@@ -429,7 +429,7 @@ sys_mkdir (uint32_t *esp)
   if (dir == NULL)
     return false;
 
-  return filesys_create (dir, 0, false);
+  return filesys_create (dir, 0, IS_DIR);
 }
 
 static bool
