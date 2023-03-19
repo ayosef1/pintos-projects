@@ -391,19 +391,14 @@ off_t
 inode_length (const struct inode *inode)
 {
   off_t inode_length;
-<<<<<<< HEAD
   struct cache_entry * cache_entry = cache_get_entry (inode->sector, SHARE,
                                                       false);
-=======
-  struct cache_entry *cache_entry = cache_get_entry (inode->sector, R_SHARE);
->>>>>>> origin/indexingAndSubdirs
   struct inode_disk *data = (struct inode_disk *) cache_entry->data;
   inode_length = data->length;
   cache_release_entry (cache_entry, SHARE, false);
   return inode_length;
 }
 
-<<<<<<< HEAD
 /* Atomically checks inode INODE's length and acquires the extension lock
    if the write about to happen is longer than WRITE_END. */
 static bool
@@ -424,22 +419,6 @@ inode_check_extension (struct inode *inode, off_t write_end)
 
 /* Update the inode INODE's length to WRITE_END and releases the extension
    lock. */
-=======
-
-/* Indicates if INODE's represents file or directory. */
-bool
-inode_is_file (const struct inode *inode)
-{
-  bool is_file;
-  struct cache_entry *cache_entry = cache_get_entry (inode->sector, R_SHARE);
-  struct inode_disk *data = (struct inode_disk *) cache_entry->data;
-  is_file = data->is_file;
-  cache_release_entry (cache_entry, R_SHARE);
-  return is_file;
-}
-
-/* Update the inode INODE's length WRITE_END is larger than current length. */
->>>>>>> origin/indexingAndSubdirs
 static void
 inode_update_length (struct inode *inode, off_t write_end)
 {
