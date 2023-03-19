@@ -74,6 +74,28 @@ struct child_exit_info
         struct list_elem child_elem;            /* List element for parent's
                                                    children list. */
     };
+/* The type of an file descriptor, either file, directory or reserved. */
+enum fd_type
+   {
+      FILE,
+      DIR,
+      RESERVED,
+   };
+
+/* A pointer to either a file or a directory in the file
+   descriptor table.  */
+union fdt_ptr
+   {
+      struct file *file;
+      struct dir *dir;
+   };
+
+/* Entry in the file descriptor table. */
+struct fdt_entry
+   {
+      union fdt_ptr fp;          /* Directory or File Pointer. */
+      enum fd_type type;         /* Type of File Descriptor Table Entry. */
+   };
     
 /* A kernel thread or user process.
 

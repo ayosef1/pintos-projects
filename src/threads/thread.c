@@ -17,6 +17,7 @@
 #include "userprog/syscall.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+#include "filesys/directory.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -81,8 +82,7 @@ static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
 static struct thread *highest_priority_ready (void);
-static void init_thread (struct thread *, const char *name, int priority,
-                         block_sector_t cwd);
+static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
 static bool init_child (struct thread *t);
 static void *alloc_frame (struct thread *, size_t size);
@@ -131,7 +131,7 @@ thread_init (void)
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
-  init_thread (initial_thread, "main", PRI_DEFAULT, ROOT_DIR_SECTOR);
+  init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
 }
@@ -236,7 +236,7 @@ thread_create (const char *name, int priority,
     return TID_ERROR;
 
   /* Initialize thread. */
-  init_thread (t, name, priority, thread_current ()->cwd);
+  init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
   /* Initialize thread's child struct if applicable. */
@@ -580,8 +580,7 @@ is_thread (struct thread *t)
 /* Does basic initialization of T as a blocked thread named
    NAME. */
 static void
-init_thread (struct thread *t, const char *name, int priority,
-             block_sector_t cwd)
+init_thread (struct thread *t, const char *name, int priority)
 {
   enum intr_level old_level;
 
@@ -600,9 +599,6 @@ init_thread (struct thread *t, const char *name, int priority,
   t->wake_sema = NULL;
   t->magic = THREAD_MAGIC;
   t->waiting_lock = NULL;
-  #ifdef FILESYS
-    t->cwd = cwd;
-  #endif
 
   if (thread_mlfqs) {
     /* Initial thread has recent cpu time and nice value of 0.

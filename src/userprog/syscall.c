@@ -52,6 +52,7 @@ static bool is_valid_address (void *uaddr);
 
 static bool is_valid_path (char *path);
 static bool is_valid_fd (int fd);
+static bool is_valid_file_fdt_entry (struct fdt_entry *fdt_entry);
 
 #define CMD_LINE_MAX 128        /* Maximum number of command line characters */
 
@@ -654,4 +655,12 @@ static bool
 is_valid_fd (int fd) 
 {
   return fd >= 0 && fd < MAX_FILES;
+}
+
+/* Checks whether the file descriptor table entry FDT_ENTRY is a file
+   and points to a valid file. */
+static bool
+is_valid_file_fdt_entry (struct fdt_entry *fdt_entry)
+{
+    return fdt_entry->fp.file != NULL && fdt_entry->type == FILE;
 }

@@ -73,7 +73,7 @@ filesys_create (const char *pathname, off_t initial_size, bool is_file)
     {
       block_sector_t parent_dir_sector = inode_get_inumber (dir_get_inode 
                                                             (parent_dir));
-      success = dir_create (inode_sector, parent_dir_sector, INITIAL_DIRENTS);
+      success = dir_create (inode_sector, parent_dir_sector);
     }
 
   if (success)
@@ -155,7 +155,7 @@ do_format (void)
 {
   printf ("Formatting file system...");
   free_map_create ();
-  if (!dir_create (ROOT_DIR_SECTOR, ROOT_DIR_SECTOR, INITIAL_DIRENTS))
+  if (!dir_create (ROOT_DIR_SECTOR, ROOT_DIR_SECTOR))
     PANIC ("root directory creation failed");
   free_map_close ();
   printf ("done.\n");
