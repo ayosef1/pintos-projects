@@ -192,9 +192,6 @@ split_path (const char *path, char **parent_dir_path, char **dirent)
       *parent_dir_path = malloc (2);
       ASSERT (*parent_dir_path != NULL);
 
-      *dirent = malloc (2);
-      ASSERT (*dirent != NULL);
-
       strlcpy (*parent_dir_path, "/", 2);
       *dirent = path;
     }
