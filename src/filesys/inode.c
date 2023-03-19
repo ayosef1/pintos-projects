@@ -66,6 +66,7 @@ struct inode
     int open_cnt;                       /* Number of openers. */
     int write_cnt;                      /* Number of writers. */
     bool removed;                       /* True if deleted, false otherwise. */
+    bool is_file;                       /* Is the inode a file or dir. */
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
     struct condition no_writers;        /* Condition variable to appropriately
                                            set deny_write_cnt. */
@@ -170,6 +171,11 @@ inode_open (block_sector_t sector)
   lock_init (&inode->deny_write_lock);
   lock_init (&inode->extension_lock);
   cond_init (&inode->no_writers);
+
+  struct cache_entry *inode_entry = cache_get_entry (sector, SHARE, false, -1);
+  struct inode_disk *disk_inode = (struct inode_disk  *) inode_entry->data;
+  inode->is_file = disk_inode->is_file;
+  cache_release_entry (inode_entry, SHARE, false);
 
   lock_acquire (&open_inodes_lock);
   list_push_front (&open_inodes, &inode->elem);
@@ -408,13 +414,7 @@ inode_length (const struct inode *inode)
 bool
 inode_is_file (const struct inode *inode)
 {
-  bool is_file;
-  struct cache_entry *cache_entry = cache_get_entry (inode->sector, SHARE,
-                                                     false, -1);
-  struct inode_disk *data = (struct inode_disk *) cache_entry->data;
-  is_file = data->is_file;
-  cache_release_entry (cache_entry, SHARE, false);
-  return is_file;
+  return inode->is_file;
 }
 
 /* Atomically checks inode INODE's length and acquires the extension lock
