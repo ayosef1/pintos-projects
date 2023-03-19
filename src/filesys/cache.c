@@ -126,6 +126,7 @@ cache_get_entry (block_sector_t sector, enum cache_use_type type, bool new)
         
     return entry;
 }
+
 void
 cache_release_entry (struct cache_entry *entry, enum cache_use_type type,
                      bool dirty)
@@ -173,7 +174,10 @@ cache_write_to_disk (bool filesys_done)
                             cur->dirty = false;
                         }
                     else if (filesys_done)
-                        free (cur->data);
+                        {
+                            cur->allocated = false;
+                            free (cur->data);
+                        }
 
                     cache_release_entry (cur, EXCL, false);
                 }
@@ -326,7 +330,7 @@ evict_cache_entry (void)
     Otherwise, no syncrhonization needed. */
 static void
 get_entry_sync (struct cache_entry *entry, enum cache_use_type type,
-                bool evict)
+                bool write_back)
 {
     switch (type)
         {
@@ -340,7 +344,7 @@ get_entry_sync (struct cache_entry *entry, enum cache_use_type type,
                         while (entry->shared_refs != 0);
                         entry->excl_waiters--;
                     }
-                if (!evict)
+                if (!write_back)
                     entry->accessed = true;
                 break;
             case (SHARE):
