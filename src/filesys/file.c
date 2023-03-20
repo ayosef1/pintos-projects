@@ -1,6 +1,5 @@
 #include "filesys/file.h"
 #include <debug.h>
-#include "filesys/directory.h"
 #include "filesys/inode.h"
 #include "threads/malloc.h"
 
@@ -167,4 +166,3 @@ file_tell (struct file *file)
   ASSERT (file != NULL);
   return file->pos;
 }
-
