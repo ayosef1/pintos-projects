@@ -15,9 +15,7 @@
 #include "threads/vaddr.h"
 #ifdef USERPROG
 #include "userprog/process.h"
-#include "userprog/syscall.h"
 #include "filesys/file.h"
-#include "filesys/filesys.h"
 #include "filesys/directory.h"
 #endif
 

@@ -521,7 +521,7 @@ get_arg_string (void *esp, int pos, int limit)
   end = *str_ptr + limit + 1;
   for (cur = *str_ptr; cur < end; cur++)
     {
-      if (pg_ofs(cur) == 0 && !is_valid_address (cur))
+      if (pg_ofs (cur) == 0 && !is_valid_address (cur))
         exit (-1);
       
       if (*cur == '\0')

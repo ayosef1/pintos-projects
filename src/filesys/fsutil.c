@@ -120,7 +120,7 @@ fsutil_extract (char **argv UNUSED)
           printf ("Putting '%s' into the file system...\n", file_name);
 
           /* Create destination file. */
-          if (!filesys_create (file_name, size, true))
+          if (!filesys_create (file_name, size, IS_FILE))
             PANIC ("%s: create failed", file_name);
           struct fdt_entry fdt_entry;
           if (!filesys_open (file_name, &fdt_entry))

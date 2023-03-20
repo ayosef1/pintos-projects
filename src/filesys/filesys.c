@@ -167,7 +167,6 @@ filesys_remove (const char *pathname)
   return success;
 }
 
-
 /* Formats the file system. */
 static void
 do_format (void)
