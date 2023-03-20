@@ -177,7 +177,7 @@ cache_write_to_disk (bool filesys_done)
             lock_acquire (&cur->lock);
             if (cur->allocated)
                 {
-                    get_entry_sync (cur, EXCL, false);
+                    get_entry_sync (cur, EXCL, true);
                     if (cur->dirty)
                         {
                             block_write (fs_device, cur->sector, cur->data);
