@@ -274,6 +274,10 @@ This was supported by similar design choices made by Unix in their filesystem.
             union fdt_ptr fp;          /* Directory or File Pointer. */
             enum fd_type type;         /* File Descriptor Table Entry Type. */
         };
+    
+    Added member to `struct inode':
+    struct lock dir_lock;              /* Sync for operations on the same 
+                                          directory to wait for one another. */
 
 ---- ALGORITHMS ----
 
