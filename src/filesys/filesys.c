@@ -187,14 +187,14 @@ split_path (const char *path, char **parent_dir_path, char **dirent)
   int path_len = strlen (path);
   char *last_slash;
 
-  /* Case 1: an absolute path to root directory. */
-  if (path_len == 1 && *path == '/')
+  /* Case 1: an absolute path to root directory consisting only of /'s. */
+  if (path[path_len - 1] == '/')
     {
       *parent_dir_path = malloc (2);
       ASSERT (*parent_dir_path != NULL);
 
       strlcpy (*parent_dir_path, "/", 2);
-      *dirent = path;
+      *dirent = path + path_len - 1;
     }
   /* Case 2: any path in format a/b/... or /a/b/... */
   else if ((last_slash = strrchr (path, '/')) != NULL)

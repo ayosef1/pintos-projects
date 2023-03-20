@@ -287,6 +287,58 @@ This was supported by similar design choices made by Unix in their filesystem.
 >> B2: Describe your code for traversing a user-specified path.  How
 >> do traversals of absolute and relative paths differ?
 
+When a user provides a path, we first check that the length of each 
+directory/file in the path does not exceed NAME_MAX. We also chose to reject
+any path that ends in a /, except for paths referring to the root directory. 
+This allows us to check the last character to see if a path refers to the root
+directory since multiple /'s are treated as one.
+ 
+Once the path has been confirmed to be valid, we then split the path into two 
+components. The first component is the path to the parent dictory of the 
+file/directory that the user-specified path refers to. Meanwhile, the second 
+component is the name of that file/directory. To perform this, we consider three 
+cases in our split_path function. Case 1: we're dealing with an absolute path 
+to the root directory that consists solely of /'s, in which case both the path 
+to the parent directory and the directory name are set to the string "/". 
+Case 2: We have an absolute or relative path to some other file/directory or a 
+path to the root that includes the subdirs '.' and/or '..'. In Case 2, the path 
+to the parent consists of substring from the path up to but not including the 
+last slash and the file/directory name is the substring following the last slash 
+to the end of the string. However, in the case that the path refers to the root
+and consists of subdirs '.' and '..', then the path to parent directory will
+consist of all the /'s leading up to the first '.' or '..'. Case 3: We have a 
+relative path consisting of just the name of the file/directory, in which case, 
+the parent directory's path is just '.' and the file/directory name is the path 
+itself.
+
+Once these components have been extracted, we perform our traversal on the
+parent directory path using the function dir_pathname_lookup, which returns the 
+dir struct associated with the directory specified at pathname or NULL if an 
+error is encountered. Specifically, this function first checks whether we're
+dealing with an absolute or relative path. If the parent directory's path begins
+with a '/' or the current working directory is not set, we then know that the 
+path is absolute and we open the root directory and begin our traversal there. 
+Otherwise, we reopen the current thread's cwd and start traversing.
+
+Using strtok_r, we tokenize the parent directory path. For each token, we 
+check if the currently open directory contains the sub-directory with the name 
+of token using dir_lookup. If so, we then close the open directory, check that 
+the sub-directory is indeed a directory, open the subdirectory, and continue our 
+traversal by looking for the next token in the subdirectory we just opened. If 
+we are unable to find the next sub-directory, we stop traversing and return 
+NULL. Otherwise, once we find the parent directory for the user-specified path, 
+we return a pointer to its dir struct.
+
+Once we acquire the parent directory struct for the directory/file specified by
+a user path, we can then check if the file/directory is present in the parent 
+directory, which is important to know when adding, removing, and opening
+files/directories. Additionally, we also use this function to ensure a directory
+path provided to chdir is valid.
+
+Overall, traversals of absolute and relative paths differ in how the initial 
+directory is determined. For an absolute path, we initially open the root 
+directory, whereas for a relative path, we reopen the current working directory.
+
 ---- SYNCHRONIZATION ----
 
 >> B4: How do you prevent races on directory entries?  For example,
@@ -294,15 +346,59 @@ This was supported by similar design choices made by Unix in their filesystem.
 >> should succeed, as should only one of two simultaneous attempts to
 >> create a file with the same name, and so on.
 
+To prevent races on directory entries, we introduced a lock to our inode struct 
+called dir_lock. Whenever, dir_add, dir_remove, dir_readdir, dir_lookup, and our 
+static helper function get_num_dirents, are going through the data of a
+directory, they must first acquire the dir_lock located in the in memory inode
+struct associated with that directory. This is to ensure that a dirent can only
+successfuly be added and removed by one thread. Likewise, we use this lock in 
+dir_readdir and dir_lookup to ensure that a dirent is not removed or added while 
+one of these functions accesses/searches for it. Naturally, the same applies 
+to our get_num_dirents function which needs to ensure the number of dirents does 
+not change while it is calculating the count.
+
 >> B5: Does your implementation allow a directory to be removed if it
 >> is open by a process or if it is in use as a process's current
 >> working directory?  If so, what happens to that process's future
 >> file system operations?  If not, how do you prevent it?
 
+Our implementation does not allow a directory to be removed if it is open by a 
+process nor if it is in use as a process's current working directory. To prevent 
+the closing of an open directory, we added a condition to dir_remove that checks 
+if the open count for the inode associated with the directory is greater than 1.
+This is significant because we first open the inode associated with the
+directory to ensure that it is not the root directory. This means that if no 
+process has opened the directory the open count will be exactly 1 at the time we 
+acquire the open count since we have a lock on the directory and it was just 
+opened have prior to acquiring the open count. Thus, an open count greater than
+1 indicates the directory is open in a process. 
+
+As for ensuring that we do not close a process in use as a process's cwd, this 
+is accomplished by keeping the cwd of a process open for as long as it is its 
+cwd. For this there are two cases, the cwd is the root directory or the cwd is 
+another directory. If the former applies, we are assured we will not delete the 
+cwd since we cannot remove the root directory. In the latter case, the open 
+count of the inode associated with that directory will be greater than 1, again 
+ensuring that this directory is not removed.
+
 ---- RATIONALE ----
 
 >> B6: Explain why you chose to represent the current directory of a
 >> process the way you did.
+
+Because we chose to prevent the removal of a process's cwd, we decided to keep 
+a pointer to the directory struct that corresponds to a process' cwd. This is 
+updated by the system call chdir and our function init_child, which assigns a 
+thread's cwd to be that of its parent. However, if chdir has never been called 
+then the pointer is NULL indicating that the root directory is the thread's 
+cwd: i.e. a process' cwd if it is the root directory will either be NULL or a 
+pointer to the dir struct associated with the root directory. Overall, our 
+decision to represent the cwd of a process as a pointer to dir struct allows us 
+to keep the directory open for as long as it is the cwd of that process. This is 
+important as mentioned in the prior response since it ensures that we do not 
+remove the current working directory of a processs - as this is accomplished by 
+preventing the removal of an open directory.
+
 
                  BUFFER CACHE
                  ============
