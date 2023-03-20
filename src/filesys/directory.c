@@ -200,7 +200,7 @@ dir_add (struct dir *dir, const char *name, block_sector_t inode_sector)
 }
 
 /* Returns the number of directory entries in directory DIR excluding the
-   home and parent directory. */
+   home and parent directory. Assumes lock on directory already acquired. */
 static size_t
 get_num_dirents (struct dir *dir)
 {
@@ -211,12 +211,12 @@ get_num_dirents (struct dir *dir)
   ASSERT (dir != NULL);
 
   num_dirents = 0;
-  inode_lock_dir (dir->inode);
+
   for (ofs = 0; inode_read_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
        ofs += sizeof e) 
     if (e.in_use) 
       num_dirents++;
-  inode_unlock_dir (dir->inode);
+
   return num_dirents - 2;
 }
 
@@ -249,7 +249,7 @@ dir_remove (struct dir *dir, const char *name)
   
   /* Not allowed to remove nonempty directories, cwd, 
      or directories currently open in process. Ordering important here
-     because prevents deadlock if trying to remove `.` from DIR. */
+     because prevents deadlock if trying to remove `.` or `..` from DIR. */
   if (!inode_is_file (inode) && 
       (inode_get_open_cnt (inode) > 1 ||
         get_num_dirents (dir_open (inode)) != 0))
