@@ -211,10 +211,12 @@ get_num_dirents (struct dir *dir)
   ASSERT (dir != NULL);
 
   num_dirents = 0;
+  inode_lock_dir (dir->inode);
   for (ofs = 0; inode_read_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
        ofs += sizeof e) 
     if (e.in_use) 
       num_dirents++;
+  inode_unlock_dir (dir->inode);
   return num_dirents - 2;
 }
 
@@ -222,7 +224,8 @@ get_num_dirents (struct dir *dir)
    Returns true if successful, false on failure,
    Failure only occurs on a file if there is no file with the given NAME.
    Failure occurs on a dir if the directory isn't empty, the directory NAME 
-   is not empty or is currently open by another process. */
+   is not empty or is currently open by another process.
+   Does not remove `.` */
 bool
 dir_remove (struct dir *dir, const char *name) 
 {
@@ -241,14 +244,15 @@ dir_remove (struct dir *dir, const char *name)
 
   /* Open inode. */
   inode = inode_open (e.inode_sector);
-  if (inode == NULL)
+  if (inode == NULL || inode_get_inumber (inode) == ROOT_DIR_SECTOR)
     goto done;
   
   /* Not allowed to remove nonempty directories, cwd, 
-     or directories currently open in process. */
+     or directories currently open in process. Ordering important here
+     because prevents deadlock if trying to remove `.` from DIR. */
   if (!inode_is_file (inode) && 
-      (get_num_dirents (dir_open (inode)) != 0 ||
-       inode_get_open_cnt (inode) > 1))
+      (inode_get_open_cnt (inode) > 1 ||
+        get_num_dirents (dir_open (inode)) != 0))
     goto done;
 
   /* Erase directory entry. */

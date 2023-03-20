@@ -180,8 +180,8 @@ do_format (void)
   printf ("done.\n");
 }
 
-/* Given a path PATH, assigns EXCEPT_LAST to be all but the last dirent 
-   and LAST to be the last dirent in PATH. */
+/* Given a path PATH, assigns PARENT_DIR_PATH to be everything up to
+   the final `/`delimiter and DIRENT to be the last dirent in PATH. */
 static void
 split_path (const char *path, char **parent_dir_path, char **dirent)
 {
