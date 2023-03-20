@@ -248,7 +248,7 @@ dir_remove (struct dir *dir, const char *name)
     goto done;
   
   /* Not allowed to remove nonempty directories, cwd, 
-     or directories currently open in process. Ordering important here
+     or directories currently open in any process. Ordering important here
      because prevents deadlock if trying to remove `.` or `..` from DIR. */
   if (!inode_is_file (inode) && 
       (inode_get_open_cnt (inode) > 1 ||
